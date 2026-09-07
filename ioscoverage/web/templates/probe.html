@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>iOS 覆盖率网络探针</title>
+  <style>
+__INLINE_CSS__
+  </style>
+</head>
+<body>
+  <h1>iOS 覆盖率网络探针</h1>
+  <p>选择一个不超过 __MAX_MEBIBYTES__ MiB 的小文件。Safari 会先计算 SHA-256，服务端会重新计算并校验。</p>
+  <form id="upload-form">
+    <label for="token">上传 Token（普通重启保持不变）</label>
+    <input id="token" type="password" autocomplete="off" required>
+    <label for="file">测试文件</label>
+    <input id="file" type="file" required>
+    <button type="submit">计算 SHA-256 并上传</button>
+  </form>
+  <pre id="result">等待上传</pre>
+  <h2>最近成功上传</h2>
+  <table><thead><tr><th>时间（UTC）</th><th>来源 IP</th><th>文件</th><th>字节</th><th>SHA-256</th></tr></thead>
+  <tbody>__RECENT_ROWS__</tbody></table>
+  <script>
+__INLINE_SCRIPT__
+  </script>
+</body>
+</html>

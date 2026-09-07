@@ -1,0 +1,18 @@
+# Code map
+
+| Task or symptom | First read | Main code | Tests | Protocol/guide |
+| --- | --- | --- | --- | --- |
+| Service fails to start/stop | `modules/server.md` | `ioscoverage/server/deployment.py`, `ioscoverage/server/bootstrap.py`, `ioscoverage/server/http/server.py`, `scripts/start_coverage_server.sh` | `tests/server/test_deployment_config.py`, `tests/test_architecture.py`, `tests/server/test_probes.py` | `README.md`, `docs/runtime_deployment.md` |
+| Runtime root or project config fails | `architecture.md`, `modules/integrations.md` | `ioscoverage/runtime.py`, `ioscoverage/projects.py` | `tests/integrations/test_project_registry.py` | `docs/runtime_deployment.md`, `docs/project_registry.md` |
+| iPhone probe/Run upload fails | `workflows/run_upload.md` | `ioscoverage/server/http/routes/probes.py`, `ioscoverage/server/http/routes/runs.py`, `ioscoverage/storage/runs.py`, `ioscoverage/storage/artifact_files.py` | `tests/server/test_probes.py`, `tests/server/test_api_contracts.py` | `docs/api.md` |
+| Build registration fails | `workflows/build_registration.md` | `ioscoverage/server/http/routes/builds.py`, `ioscoverage/storage/builds.py`, `ioscoverage/projects.py`, `ioscoverage/integrations/xcode_artifacts.py`, `ioscoverage/integrations/git_repository.py` | `tests/server/test_api_contracts.py` | `docs/api.md` |
+| GitLab MR Cycle creation fails | `workflows/cycle_creation.md` | `ioscoverage/server/http/routes/cycles.py`, `ioscoverage/projects.py`, `ioscoverage/integrations/gitlab_mr.py`, `ioscoverage/storage/cycles.py` | `tests/integrations/test_gitlab_mr.py`, `tests/server/test_usability.py` | `docs/api.md` |
+| Background analysis fails/stalls | `workflows/automatic_analysis.md` | `ioscoverage/analysis/scheduler.py`, `ioscoverage/storage/analysis_state.py`, `ioscoverage/analysis/orchestrator.py` | `tests/server/test_automatic_analysis.py`, `tests/analysis/test_orchestrator.py` | `docs/automatic_analysis.md` |
+| Single-Build coverage is wrong | `modules/analysis.md` | `ioscoverage/analysis/single_build/analyzer.py`, `ioscoverage/analysis/mapping/coverage_export.py` | `tests/analysis/test_single_build.py` | `docs/single_build_cli.md` |
+| Current diff coverage is wrong | `modules/analysis.md` | `ioscoverage/analysis/diff/analyzer.py`, `ioscoverage/analysis/diff/git_diff_parser.py` | `tests/analysis/test_single_build_diff.py` | `docs/single_build_diff_cli.md` |
+| Historical inheritance is wrong | `modules/analysis.md` | `ioscoverage/analysis/cumulative/analyzer.py`, `ioscoverage/analysis/mapping/source_region.py` | `tests/analysis/test_cycle_coverage.py` | `docs/cycle_coverage_cli.md` |
+| Report page/API is wrong | `workflows/coverage_report.md` | `ioscoverage/storage/reports.py`, `ioscoverage/server/http/routes/reports.py`, `ioscoverage/web/` | `tests/web/test_report_ui.py` | `docs/coverage_report_ui.md` |
+| Token permission is wrong | `modules/server.md` | `ioscoverage/server/http/auth.py`, `ioscoverage/storage/tokens.py` | `tests/storage/test_tokens.py`, server tests | `docs/api.md` |
+| SQLite/file integrity issue | `modules/storage.md` | `ioscoverage/storage/database.py`, `ioscoverage/storage/schema.py`, `ioscoverage/storage/artifact_files.py`, resource modules | storage assertions in server/analysis tests | `knowledge/invariants.md` |
+| CLI debugging | `modules/tools.md` | `ioscoverage/cli/`, root wrappers | `tests/test_architecture.py`, relevant analyzer tests | `docs/*_cli.md` |
+| Public repository check fails | `modules/tools.md`, `invariants.md` | `scripts/check_public_repository.py`, `.gitignore` | `tests/test_public_repository_check.py`, `tests/test_architecture.py` | `README.md`, `docs/runtime_deployment.md` |

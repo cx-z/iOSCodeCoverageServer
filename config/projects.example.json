@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "projects": [
+    {
+      "project": "ExampleApp",
+      "display_name": "Example App",
+      "repository_path": "/path/to/ExampleApp",
+      "gitlab": {
+        "host": "git.example.com",
+        "project_path": "mobile/example-app"
+      },
+      "allowed_bundle_ids": [
+        "com.example.coverage"
+      ]
+    }
+  ]
+}

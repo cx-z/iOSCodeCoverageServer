@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>iOS Coverage Report</title>
+  <style>
+__INLINE_CSS__
+  </style>
+</head>
+<body>
+  <header><div class="header-inner">
+    <div><h1>iOS 变更行覆盖报告</h1><div class="muted"><a href="/cycles/">返回 Cycle 列表</a> · Cycle <code id="cycle-id"></code></div></div>
+    <div><div class="status"><span id="status-dot" class="dot"></span><span id="status-text">未连接</span></div><div id="updated-at" class="muted">—</div></div>
+  </div></header>
+  <main class="page">
+    <section id="auth-panel" class="auth">
+      <strong>输入本机 Coverage Token</strong>
+      <div class="muted">Token 只保存在当前浏览器标签页，不写入 URL、Cookie 或服务端日志。</div>
+      <div class="auth-row"><input id="token" type="password" autocomplete="off" placeholder="Bearer Token"><button id="connect">查看报告</button></div>
+      <div id="auth-error" class="error"></div>
+    </section>
+    <section id="content" hidden>
+      <div class="cards">
+        <div class="card covered"><span>Covered</span><strong id="covered">—</strong></div>
+        <div class="card uncovered"><span>Uncovered</span><strong id="uncovered">—</strong></div>
+        <div class="card not-measurable"><span>不可测量</span><strong id="not-measurable">—</strong></div>
+        <div class="card unknown"><span>Unknown</span><strong id="unknown">—</strong></div>
+        <div class="card"><span>可测量覆盖率</span><strong id="percent">—</strong></div>
+      </div>
+      <section class="panel">
+        <div class="toolbar"><div><h2>变更文件与新侧行</h2><div id="report-meta" class="muted"></div></div><label class="toggle"><input id="only-uncovered" type="checkbox">只看未覆盖代码</label></div>
+        <div class="workspace"><nav id="file-list" class="file-list"></nav><div id="detail" class="detail"><div class="empty">选择一个文件查看变更行</div></div></div>
+      </section>
+    </section>
+  </main>
+  <script>
+__INLINE_SCRIPT__
+  </script>
+</body>
+</html>

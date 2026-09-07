@@ -1,0 +1,8 @@
+    body { font: 16px -apple-system, BlinkMacSystemFont, sans-serif; margin: 0 auto; max-width: 860px; padding: 24px; color: #202124; }
+    label { display: block; margin: 16px 0 6px; font-weight: 600; }
+    input, button { box-sizing: border-box; font: inherit; padding: 12px; width: 100%; }
+    button { margin-top: 18px; background: #1769e0; color: white; border: 0; border-radius: 8px; }
+    pre { background: #f4f6f8; border-radius: 8px; padding: 12px; white-space: pre-wrap; word-break: break-word; }
+    table { border-collapse: collapse; display: block; overflow-x: auto; width: 100%; }
+    th, td { border-bottom: 1px solid #ddd; padding: 8px; text-align: left; white-space: nowrap; }
+    code { font-size: 12px; }

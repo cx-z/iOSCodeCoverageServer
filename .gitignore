@@ -1,0 +1,33 @@
+# Mutable deployments live outside the source tree; guard accidental root copies.
+/runtime/
+/state/
+/instance/
+/data/
+/analysis/
+/logs/
+/config/server.json
+
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# Local test and coverage output.
+/.coverage
+/coverage.xml
+/htmlcov/
+/test-results/
+/tmp/
+
+# Runtime artifacts remain private even if copied outside the anchored folders.
+*.sqlite3
+*.sqlite
+*.db
+*.sqlite3-journal
+*.sqlite3-shm
+*.sqlite3-wal
+*.profraw
+*.profdata
+*.log
+operator_token
+run_upload_token
+gitlab_api_token

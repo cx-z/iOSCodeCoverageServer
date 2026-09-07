@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>iOS Coverage Cycles</title>
+  <style>
+__INLINE_CSS__
+  </style>
+</head>
+<body>
+  <header><div class="page"><h1>iOS 真机覆盖率 Cycle</h1><div class="muted">创建提测 Cycle，并进入最新累计覆盖报告。</div></div></header>
+  <main class="page">
+    <section id="auth-panel" class="panel">
+      <h2>连接本机服务</h2>
+      <p class="muted">输入 Mac 操作员 Token。Token 仅保存在当前浏览器标签页。</p>
+      <div class="row"><input id="token" type="password" autocomplete="off" placeholder="Mac 操作员 Bearer Token"><button id="connect" type="button">查看 Cycle</button></div>
+      <div id="auth-error" class="error"></div>
+    </section>
+    <section id="content" hidden>
+      <section class="panel">
+        <h2>从 MR 创建或打开 Cycle</h2>
+        <p class="muted">支持 MR 详情、diffs 或 commits 页面 URL。</p>
+        <form id="create-form" class="row"><input id="mr-url" type="url" required placeholder="https://git.example.com/group/project/merge_requests/42"><button type="submit">创建或打开</button></form>
+        <div id="create-status" class="error"></div>
+      </section>
+      <section class="panel">
+        <div class="row"><h2>Cycle 列表</h2><select id="project-filter"><option value="">全部项目</option></select><button id="refresh" class="secondary" type="button">刷新</button></div>
+        <div class="table-wrap"><table><thead><tr><th>MR</th><th>目标分支</th><th>状态</th><th>Build / Run</th><th>最近更新</th><th>Cycle ID</th><th>操作</th></tr></thead><tbody id="cycle-rows"></tbody></table></div>
+        <div id="empty" class="empty" hidden>暂无 Cycle</div>
+      </section>
+    </section>
+  </main>
+  <script>
+__INLINE_SCRIPT__
+  </script>
+</body>
+</html>
