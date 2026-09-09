@@ -8,6 +8,7 @@ from typing import Optional
 
 from ioscoverage.analysis.scheduler import AnalysisScheduler
 from ioscoverage.integrations.gitlab_mr import GitLabMRClient
+from ioscoverage.server.mr_coverage_resolver import MergeRequestCoverageResolver
 from ioscoverage.storage.analysis_state import AnalysisStateStore
 from ioscoverage.storage.coverage_store import CoverageStore
 from ioscoverage.storage.reports import CoverageReportStore
@@ -40,3 +41,4 @@ class ProbeConfig:
     run_upload_token: Optional[str] = None
     gitlab_mr_client: Optional[GitLabMRClient] = None
     report_store: Optional[CoverageReportStore] = None
+    merge_request_coverage_resolver: Optional[MergeRequestCoverageResolver] = None

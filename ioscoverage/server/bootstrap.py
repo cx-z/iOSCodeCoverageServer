@@ -21,6 +21,7 @@ from ioscoverage.server.deployment import (
     ServerDeploymentConfigurationError,
 )
 from ioscoverage.server.http.server import ProbeHTTPServer
+from ioscoverage.server.mr_coverage_resolver import MergeRequestCoverageResolver
 from ioscoverage.server.logging import configure_logging, write_log
 from ioscoverage.storage.analysis_state import AnalysisStateStore, AnalysisStateStoreError
 from ioscoverage.storage.coverage_store import CoverageStore
@@ -63,6 +64,13 @@ def create_server(
         )
         analysis_orchestrator_factory = lambda: CycleAnalysisOrchestrator(analysis_configuration)
     scheduler = AnalysisScheduler(analysis_state_store, analysis_orchestrator_factory) if start_analysis_scheduler else None
+    merge_request_coverage_resolver = (
+        MergeRequestCoverageResolver(
+            gitlab_mr_client, coverage_store, analysis_state_store, report_store
+        )
+        if gitlab_mr_client is not None
+        else None
+    )
     config = ProbeConfig(
         token=token,
         data_dir=runtime_paths.data_dir,
@@ -77,6 +85,7 @@ def create_server(
         run_upload_token=run_upload_token,
         gitlab_mr_client=gitlab_mr_client,
         report_store=report_store,
+        merge_request_coverage_resolver=merge_request_coverage_resolver,
     )
     return ProbeHTTPServer((host, port), config)
 

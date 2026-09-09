@@ -35,6 +35,13 @@ logs/server.log
 
 浏览器入口：`http://127.0.0.1:8765/cycles/`。HTTP 协议见 [docs/api.md](docs/api.md)，日常流程见 [docs/daily_workflow.md](docs/daily_workflow.md)，部署配置见 [docs/runtime_deployment.md](docs/runtime_deployment.md) 和 [docs/project_registry.md](docs/project_registry.md)。
 
+## 可选 MR 插件
+
+如需在 GitLab Merge Request 的变更页面直接查看逐行覆盖状态，可以安装可选的 Chrome 插件。插件通过本机服务端的只读接口校验 MR diff 身份并读取覆盖报告；不安装插件不影响 Cycle、Build、Run、后台分析或内置报告页。
+
+- 插件仓库：[IOSCoverageGitLabExtension](https://github.com/cx-z/IOSCoverageGitLabExtension)
+- 下载版本：[v0.2.1 Release](https://github.com/cx-z/IOSCoverageGitLabExtension/releases/tag/v0.2.1)
+
 ## 诊断 CLI
 
 四个兼容入口都必须显式传 `--runtime-root`，且只接受 Cycle/Build/Run 等不可变身份，不能传仓库或产物路径：

@@ -184,6 +184,8 @@ def normalize_mr_url(value: object, registry: ProjectRegistry) -> NormalizedMRUR
         if len(parts) < 4 or parts[-2] != "merge_requests":
             raise GitLabMRClientError("invalid_mr_url", "mr_url is not an allowed GitLab MR", 400)
         iid_text, project_parts = parts[-1], parts[:-2]
+    if project_parts and project_parts[-1] == "-":
+        project_parts = project_parts[:-1]
     if (not iid_text.isdigit() or int(iid_text) <= 0 or not project_parts
             or any(part in ("", ".", "..") for part in project_parts)):
         raise GitLabMRClientError("invalid_mr_url", "mr_url is not an allowed GitLab MR", 400)

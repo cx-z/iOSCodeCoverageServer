@@ -44,10 +44,20 @@ GET /api/v1/cycles/<cycle_id>/report/files/<file_id>
 
 报告 API 不返回 Mach-O/dSYM/profraw 路径、内部命令、Token 或任意文件内容。源码文本仅来自既有累计报告中已经固定的 Git 新侧变更行。
 
+GitLab MR 页面上的只读浏览器扩展先调用：
+
+```text
+POST /api/v1/integrations/gitlab/merge-request-coverage/resolve
+```
+
+服务端用已有 GitLab PAT 获取当前 MR 的完整 diff refs，并要求 latest success 的 current Build 满足 `merge_base_sha/base_sha`、`target_sha_at_build/start_sha`、`git_sha/head_sha` 三组完全相等。只有响应 `can_annotate=true` 时，扩展才能继续按 `summary_api` 和既有 file API 映射 `repo_relative_path + new_line_number`。任一 SHA 不同即为 `stale_diff`，不能按 head-only、路径、源码文本或行号猜测。
+
+resolver 只接受操作员 Token 和 MR 页面 URL，不创建 Cycle、不触发分析、不修改报告，也不向浏览器暴露 GitLab PAT 或本机路径。完整响应与状态语义见 [HTTP API](api.md#6-gitlab-mr-coverage-只读解析)。
+
 Cycle 列表还调用 `GET /api/v1/cycles`；创建表单调用 `POST /api/v1/cycles`。二者同样只接受操作员 Token。
 
 当前 Build 删除的文件和删除行不属于 Git 新侧分母，因此不会继续出现在文件列表。内部不可变分析证据可能保留历史提交的 patch/source 文本以证明跨 Build 映射；这些审计文件不进入报告 JSON 或页面，也不能通过 file API 读取。
 
 ## 当前边界
 
-这是可信局域网上的本机开发者报告页，不是多用户产品：没有账号系统、MR 评论、任意文件浏览、可变 latest 指针或自动上传行为。Cycle 创建只由 Mac 服务端读取固定 GitLab MR 元数据，页面本身不直接调用 GitLab；Run 上传仍只由用户在 App 中点击触发。
+这是可信局域网上的本机开发者报告能力，不是多用户产品：没有账号系统、MR 评论、任意文件浏览、可变 latest 指针或自动上传行为。Cycle 页面和浏览器扩展都不直接持有 GitLab PAT；Run 上传仍只由用户在 App 中点击触发。

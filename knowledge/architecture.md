@@ -43,6 +43,7 @@ ioscoverage/
 
 - `server.bootstrap` composes configuration, storage, integrations, scheduler, report store, and HTTP server.
 - `server.http` converts requests and responses. It may call storage facades, the scheduler, fixed integration clients, and web renderers; it does not implement SQL, LLVM, or Git algorithms.
+- `server.mr_coverage_resolver` is a read-only application service that combines one registry-bounded GitLab MR, an existing Cycle, analysis state, a completion-verified report, and its immutable current Build. It never calls mutation or scheduling APIs.
 - `web` accepts already projected values and trusted internal template names. It must not depend on SQLite, TokenStore, Build artifacts, Runs, or arbitrary paths.
 - `storage.coverage_store` is the stable facade over Cycle/Build/Run mixins. HTTP code never opens SQLite directly.
 - `analysis` reads immutable database/file identities and fixed Git objects. The scheduler invokes the orchestrator, which reuses the single-Build, diff, and cumulative analyzers.

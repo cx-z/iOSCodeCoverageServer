@@ -49,6 +49,24 @@ class CycleStoreMixin:
                 return self.get_cycle(str(row["id"])), True
             cycle_id = self._insert_cycle(normalized)
             return self.get_cycle(cycle_id), False
+    def find_cycle_by_merge_request(
+        self, project: object, mr_iid: object
+    ) -> Optional[Dict[str, object]]:
+        """Returns the stable existing Cycle for one registered project/MR identity."""
+
+        definition = self.project_definition(project)
+        if isinstance(mr_iid, bool) or not isinstance(mr_iid, (str, int)):
+            raise CoverageStoreError("invalid_mr_iid", "mr_iid is invalid")
+        normalized_iid = str(mr_iid)
+        if not normalized_iid or len(normalized_iid) > 128:
+            raise CoverageStoreError("invalid_mr_iid", "mr_iid is invalid")
+        with self._database() as connection:
+            row = connection.execute(
+                "SELECT id FROM coverage_cycles WHERE project = ? AND mr_iid = ? "
+                "ORDER BY created_at ASC, id ASC LIMIT 1",
+                (definition.project, normalized_iid),
+            ).fetchone()
+        return None if row is None else self.get_cycle(str(row["id"]))
     def _normalize_cycle_payload(
         self, payload: Mapping[str, object]
     ) -> Dict[str, Optional[str]]:

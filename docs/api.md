@@ -421,7 +421,101 @@ GET /api/v1/cycles/<cycle_id>/report/files/<file_id>
 
 二者同样要求 Bearer Token。`file_id` 是服务端签发的仓库相对路径 SHA-256，不接受路径、Git SHA、Build、Run、命令或输出目录。HTML 入口 `GET /cycles/<cycle_id>` 不携带报告数据，页面取得 Token 后才调用上述接口。完整字段和安全边界见 [本地覆盖率报告页](coverage_report_ui.md)。
 
-## 6. 大小、原子性和当前边界
+## 6. GitLab MR Coverage 只读解析
+
+浏览器扩展可用操作员 Token 将一个已注册项目的 MR 页面 URL 解析为当前 GitLab diff 与 latest success 报告之间的可信关系：
+
+```text
+POST /api/v1/integrations/gitlab/merge-request-coverage/resolve
+Authorization: Bearer <operator-token>
+Content-Type: application/json
+```
+
+请求必须恰好包含：
+
+```json
+{
+  "schema_version": 1,
+  "mr_url": "https://git.example.com/mobile/example-app/-/merge_requests/42/diffs"
+}
+```
+
+`schema_version` 必须是整数 `1`。MR URL 接受已注册 GitLab 项目的详情、`/diffs`、`/commits` 页面，并兼容带 `/-/` 和不带 `/-/` 的路由；query 与 fragment 被忽略。请求不能指定 GitLab API URL、header、Token、仓库、Build、Run、Git SHA、命令或输出路径。iOS Run Token 返回 HTTP 403 `insufficient_scope`。
+
+成功解析请求始终返回 HTTP 200 和固定顶层字段：
+
+```json
+{
+  "schema_version": 1,
+  "status": "ready",
+  "can_annotate": true,
+  "should_poll": false,
+  "mr": {
+    "host": "git.example.com",
+    "project_path": "mobile/example-app",
+    "iid": "42",
+    "canonical_url": "https://git.example.com/mobile/example-app/merge_requests/42",
+    "diff": {
+      "base_sha": "1111111111111111111111111111111111111111",
+      "start_sha": "2222222222222222222222222222222222222222",
+      "head_sha": "3333333333333333333333333333333333333333"
+    }
+  },
+  "cycle": {"id": "e9746e18-ed7a-44e4-a20b-1a7df90d382b"},
+  "analysis": {
+    "status": "succeeded",
+    "requested_generation": 7,
+    "completed_generation": 7
+  },
+  "report": {
+    "generation": 7,
+    "updated_at": "2026-09-09T08:00:00+00:00",
+    "current_build_id": "6ee8cc4c-02e3-4eaf-91ab-f0f8128011e1",
+    "summary": {
+      "changed_new_side": 43,
+      "measurable": 35,
+      "covered": 30,
+      "uncovered": 5,
+      "not_measurable": 8,
+      "unknown": 0,
+      "changed_line_coverage_percent": 85.7142857143
+    },
+    "build_diff": {
+      "base_sha": "1111111111111111111111111111111111111111",
+      "start_sha": "2222222222222222222222222222222222222222",
+      "head_sha": "3333333333333333333333333333333333333333"
+    },
+    "summary_api": "/api/v1/cycles/e9746e18-ed7a-44e4-a20b-1a7df90d382b/report"
+  }
+}
+```
+
+逐行标注只在下面三项同时相等时允许：
+
+```text
+Build.merge_base_sha      == GitLab.diff_refs.base_sha
+Build.target_sha_at_build == GitLab.diff_refs.start_sha
+Build.git_sha             == GitLab.diff_refs.head_sha
+```
+
+产品状态及轮询语义：
+
+| `status` | `can_annotate` | `should_poll` | 说明 |
+| --- | --- | --- | --- |
+| `ready` | true | false | 完整 latest success 与 GitLab 当前 diff 的三 SHA 完全一致 |
+| `cycle_not_found` | false | false | GitLab MR 有效，但不存在对应 `project + mr_iid` Cycle；不会自动创建 |
+| `report_not_available` | false | false | Cycle 存在，但没有 latest success，且当前不在 queued/running/failed 状态 |
+| `analysis_pending` | 视旧报告是否存在且匹配 | true | queued/running；匹配的完整旧报告可以继续展示 |
+| `analysis_failed` | 视旧报告是否存在且匹配 | false | 最新分析失败；匹配的完整旧报告可以继续展示 |
+| `stale_diff` | false | queued/running 时为 true，否则 false | latest success 的 Build 三 SHA 至少一项不匹配；报告引用可返回但禁止逐行标注 |
+| `mr_not_open` | false | false | MR 当前不是 opened |
+| `mr_diff_refs_not_ready` | false | false | GitLab 尚未给出完整合法的三个 diff ref |
+
+`cycle`、`analysis`、`report` 在对应状态下可以为 `null`，但顶层字段始终存在。非法 URL、未注册项目、GitLab 鉴权/网络/上游错误及报告完整性错误使用既有 HTTP 4xx/5xx 错误结构，不伪装成产品状态。
+
+该接口只执行固定 GitLab GET 和本地只读查询。它不创建或更新 Cycle，不调度分析，不修改 generation、Build、Run、SQLite 或分析文件。响应不包含 PAT、运行根目录、仓库路径、产物路径、命令或 GitLab 原始响应。
+
+## 7. 大小、原子性和当前边界
 
 - `--max-file-mib`：网络探针，默认 5 MiB；
 - `--max-run-mib`：单个 `.profraw`，默认 100 MiB；

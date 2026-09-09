@@ -55,9 +55,18 @@ class GitLabMRClientTests(unittest.TestCase):
         """Accepts only the three documented MR page shapes and ignores URL decorations."""
 
         base = "https://git.example.com/mobile/example-app/merge_requests/42"
-        for suffix in ("", "/diffs", "/commits", "/diffs?view=parallel#note_1"):
-            with self.subTest(suffix=suffix):
-                normalized = normalize_mr_url(base + suffix, self.registry)
+        values = (
+            base,
+            base + "/diffs",
+            base + "/commits",
+            base + "/diffs?view=parallel#note_1",
+            "https://git.example.com/mobile/example-app/-/merge_requests/42",
+            "https://git.example.com/mobile/example-app/-/merge_requests/42/diffs",
+            "https://git.example.com/mobile/example-app/-/merge_requests/42/commits",
+        )
+        for value in values:
+            with self.subTest(value=value):
+                normalized = normalize_mr_url(value, self.registry)
                 self.assertEqual(normalized.iid, 42)
                 self.assertEqual(normalized.project.project, "ExampleApp")
 

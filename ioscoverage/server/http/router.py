@@ -17,6 +17,7 @@ from ioscoverage.server.http.routes.analysis import AnalysisRoutesMixin
 from ioscoverage.server.http.routes.builds import BuildRoutesMixin
 from ioscoverage.server.http.routes.cycles import CycleRoutesMixin
 from ioscoverage.server.http.routes.health import HealthRoutesMixin
+from ioscoverage.server.http.routes.integrations import IntegrationRoutesMixin
 from ioscoverage.server.http.routes.pages import PageRoutesMixin
 from ioscoverage.server.http.routes.probes import ProbeRoutesMixin
 from ioscoverage.server.http.routes.reports import ReportRoutesMixin
@@ -37,6 +38,7 @@ class ProbeRequestHandler(
     RunRoutesMixin,
     AnalysisRoutesMixin,
     ReportRoutesMixin,
+    IntegrationRoutesMixin,
     ProbeRoutesMixin,
     PageRoutesMixin,
     BaseHTTPRequestHandler,
@@ -119,6 +121,11 @@ class ProbeRequestHandler(
 
         self._begin_request()
         path = urlsplit(self.path).path
+        if path == "/api/v1/integrations/gitlab/merge-request-coverage/resolve":
+            if not self._require_token():
+                return
+            self._handle_gitlab_merge_request_coverage_resolve()
+            return
         retry_match = re.fullmatch(r"/api/v1/cycles/([^/]+)/analysis/retry", path)
         if retry_match:
             if not self._require_token():

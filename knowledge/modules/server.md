@@ -12,11 +12,13 @@ No SQL, artifact persistence, LLVM, Git diff, cumulative mapping, page business-
 
 - `ioscoverage/server/deployment.py`: strict source-side `config/server.json` loader; it owns only the runtime-root pointer.
 - `ioscoverage/server/bootstrap.py`: `RuntimePaths`/ProjectRegistry dependency assembly, option parsing, `create_server`, `main`.
+- `ioscoverage/server/mr_coverage_resolver.py`: read-only GitLab MR/Cycle/state/report/Build identity orchestration and exact three-SHA annotation decision.
 - `ioscoverage/server/config.py`: `ProbeConfig` and protocol limits.
 - `ioscoverage/server/http/server.py`: `ProbeHTTPServer` lifecycle.
 - `ioscoverage/server/http/router.py`: `ProbeRequestHandler` and route matching.
 - `auth.py`, `request.py`, `multipart.py`, `response.py`, `errors.py`, `request_logging.py`: cross-route HTTP concerns.
 - `http/routes/`: resource-specific handlers.
+- `http/routes/integrations.py`: strict operator-only MR resolver protocol conversion.
 - `ioscoverage/server/logging.py`: redacted JSON-line logging.
 
 ## Inputs, outputs, dependencies
@@ -25,4 +27,4 @@ Inputs are HTTP bytes plus the runtime root loaded from `config/server.json`. Ou
 
 ## Common changes and tests
 
-Change routing only in `router.py`; resource protocol conversion in the matching route file; authentication in `auth.py`; parsing/limits in request/multipart; lifecycle in server/bootstrap. Run `tests/server/`, `tests/web/test_report_ui.py`, and `tests/test_architecture.py`.
+Change routing only in `router.py`; resource protocol conversion in the matching route file; authentication in `auth.py`; parsing/limits in request/multipart; lifecycle in server/bootstrap. The MR resolver owns cross-read status precedence but delegates GitLab, SQLite, state, report integrity, and Build reads to their existing owners. Run `tests/server/`, `tests/web/test_report_ui.py`, and `tests/test_architecture.py`.
