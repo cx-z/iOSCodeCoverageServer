@@ -28,3 +28,16 @@ App 自动累计并保存 profraw，但不会在启动、前后台或定时检�
 页面每两秒刷新 queued/running/succeeded/failed 状态，展示 covered、uncovered、not measurable、unknown、当前 Build 与历史继承来源。分母固定为 current Build 的 `merge_base_sha -> git_sha`；目标分支后续变化不会重写报告。
 
 故障诊断先检查 `<runtime_root>/logs/server.log`，不要输出 Token。需要人工只读重跑时使用四个诊断 CLI，并显式传 `--runtime-root`；CLI 不接受仓库、GitLab、Mach-O、profile 或输出路径。
+
+## 运行数据清理
+
+服务绑定端口后、开始接收请求前会先安全清理一次，之后从本次进程启动时间起每 24 小时再清理一次；重启服务会重新计时。清理会等待正在执行的分析自然结束，不会停止 HTTP 服务或中断报告读取。
+
+需要立即手动清理时，用操作员 Token 发送无请求体 POST：
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/v1/maintenance/cleanup \
+  -H 'Authorization: Bearer <operator-token>'
+```
+
+可用同一路径 GET 查看状态。`python3 cleanup_runtime_data.py` 仍只做 dry-run；离线 `--apply` 仅作为服务停止时的备用方式。

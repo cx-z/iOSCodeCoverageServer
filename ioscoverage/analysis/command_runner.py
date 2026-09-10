@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
+from ioscoverage.lifecycle.runtime_lock import inherited_runtime_lock_descriptors
+
 
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300
 
@@ -42,6 +44,7 @@ class EvidenceCommandRunner:
 
         environment = dict(os.environ)
         environment["DEVELOPER_DIR"] = str(self.developer_dir)
+        inherited_descriptors = inherited_runtime_lock_descriptors()
         started_at = self._utc_now()
         stdout_text = ""
         stderr_text = ""
@@ -58,6 +61,7 @@ class EvidenceCommandRunner:
                     text=True,
                     timeout=timeout_seconds,
                     env=environment,
+                    pass_fds=inherited_descriptors,
                 )
                 stdout_text = result.stdout
                 stderr_text = result.stderr
@@ -74,6 +78,7 @@ class EvidenceCommandRunner:
                         text=True,
                         timeout=timeout_seconds,
                         env=environment,
+                        pass_fds=inherited_descriptors,
                     )
                     stdout_file.flush()
                     os.fsync(stdout_file.fileno())

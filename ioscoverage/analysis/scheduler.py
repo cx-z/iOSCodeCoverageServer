@@ -27,18 +27,23 @@ class AnalysisScheduler:
         self,
         state_store: AnalysisStateStore,
         orchestrator_factory: Callable[[], object],
+        cancel_active_analysis: Optional[Callable[[], None]] = None,
+        active_analysis_check: Optional[Callable[[], bool]] = None,
         thread_name: str = "ios-coverage-analysis-worker",
     ):
         """Creates synchronized in-memory notification state around persisted generations."""
 
         self.state_store = state_store
         self.orchestrator_factory = orchestrator_factory
+        self.cancel_active_analysis = cancel_active_analysis
+        self.active_analysis_check = active_analysis_check
         self.thread_name = thread_name
         self._condition = threading.Condition()
         self._queue: Deque[str] = deque()
         self._queued: Set[str] = set()
         self._stopping = False
         self._started = False
+        self._paused = False
         self._running_cycle: Optional[str] = None
         self._worker: Optional[threading.Thread] = None
 
@@ -88,7 +93,7 @@ class AnalysisScheduler:
         return self.state_store.get_state(cycle_id)
 
     def shutdown(self, timeout: float = 30.0) -> bool:
-        """Stops accepting work and waits bounded time for the current immutable publish."""
+        """Stops accepting work, cancels production analysis, and joins within the limit."""
 
         with self._condition:
             if not self._started:
@@ -97,10 +102,58 @@ class AnalysisScheduler:
             self._stopping = True
             self._condition.notify_all()
             worker = self._worker
+        cancellation_completed = True
+        if self.cancel_active_analysis is not None:
+            try:
+                self.cancel_active_analysis()
+            except Exception:
+                cancellation_completed = False
         if worker is not None and worker is not threading.current_thread():
             worker.join(timeout=max(0.0, timeout))
-            return not worker.is_alive()
-        return True
+            return cancellation_completed and not worker.is_alive()
+        return cancellation_completed
+
+    def pause_and_wait_idle(
+        self, cancellation_event: Optional[threading.Event] = None
+    ) -> None:
+        """Prevents new claims while allowing pre-deletion shutdown cancellation."""
+
+        with self._condition:
+            if self._stopping:
+                raise AnalysisSchedulerError(
+                    "analysis_scheduler_stopping", "analysis scheduler is stopping"
+                )
+            self._paused = True
+            try:
+                while self._running_cycle is not None:
+                    if cancellation_event is not None and cancellation_event.is_set():
+                        raise AnalysisSchedulerError(
+                            "maintenance_wait_cancelled",
+                            "maintenance wait was cancelled during shutdown",
+                        )
+                    if self._stopping:
+                        raise AnalysisSchedulerError(
+                            "analysis_scheduler_stopping", "analysis scheduler is stopping"
+                        )
+                    self._condition.wait(
+                        0.1 if cancellation_event is not None else None
+                    )
+                if cancellation_event is not None and cancellation_event.is_set():
+                    raise AnalysisSchedulerError(
+                        "maintenance_wait_cancelled",
+                        "maintenance wait was cancelled during shutdown",
+                    )
+            except Exception:
+                self._paused = False
+                self._condition.notify_all()
+                raise
+
+    def resume(self) -> None:
+        """Allows queued analysis generations to run after maintenance."""
+
+        with self._condition:
+            self._paused = False
+            self._condition.notify_all()
 
     @property
     def running_cycle(self) -> Optional[str]:
@@ -114,7 +167,7 @@ class AnalysisScheduler:
 
         while True:
             with self._condition:
-                while not self._stopping and not self._queue:
+                while not self._stopping and (not self._queue or self._paused):
                     self._condition.wait()
                 if self._stopping:
                     return
@@ -132,6 +185,16 @@ class AnalysisScheduler:
                         cycle_id, generation, self._result_document(result)
                     )
                 except CycleAnalysisOrchestrationError as error:
+                    if error.code == "analysis_cancelled" and self._stopping:
+                        # Preserve the claimed generation as running. Startup recovery
+                        # will queue it once, without presenting shutdown as analysis failure.
+                        return
+                    if error.code == "analysis_worker_termination_failed":
+                        # Keep both the in-memory owner and durable generation running
+                        # until the process boundary proves no command can access runtime.
+                        # Failure persistence may commit and then raise while reading its
+                        # result, so it cannot be the operation that guards cleanup safety.
+                        self._wait_for_safe_execution_boundary()
                     state = self.state_store.complete_failure(
                         cycle_id,
                         generation,
@@ -155,6 +218,7 @@ class AnalysisScheduler:
                 with self._condition:
                     if self._running_cycle == cycle_id:
                         self._running_cycle = None
+                    self._condition.notify_all()
 
     def _enqueue_locked(self, cycle_id: str) -> None:
         """Coalesces repeated notifications while the condition lock is held."""
@@ -162,6 +226,23 @@ class AnalysisScheduler:
         if cycle_id not in self._queued:
             self._queue.append(cycle_id)
             self._queued.add(cycle_id)
+
+    def _wait_for_safe_execution_boundary(self) -> None:
+        """Keeps the scheduler non-idle while process-group ownership is unresolved."""
+
+        while True:
+            try:
+                active = (
+                    True
+                    if self.active_analysis_check is None
+                    else self.active_analysis_check()
+                )
+            except Exception:
+                active = True
+            if not active:
+                return
+            with self._condition:
+                self._condition.wait(0.1)
 
     def _result_document(self, result: object) -> Dict[str, object]:
         """Projects orchestration output into small persistent references and report counters."""

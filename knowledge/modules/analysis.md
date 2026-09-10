@@ -16,12 +16,14 @@ No HTTP parsing, Run upload, schema migration, Token handling, Git checkout/work
 - `mapping/coverage_export.py`: llvm-cov region normalization.
 - `mapping/source_region.py`: exact Git line/range inheritance evidence.
 - `orchestrator.py`: `CycleAnalysisOrchestrator` snapshot selection and stage coordination.
-- `scheduler.py`: single worker; `command_runner.py`: argv-only subprocess evidence.
+- `scheduler.py`: single generation worker and shutdown coordination.
+- `process_orchestrator.py` / `process_worker.py`: production-only, terminable process-group boundary around the unchanged Cycle orchestrator.
+- `command_runner.py`: argv-only subprocess evidence.
 - `storage/retained_evidence.py`: verified same-Build merged-profile baseline used after raw profile compaction.
 
 ## Dependency direction and data
 
-The orchestrator calls the three analyzers; analyzers share mapping/parser utilities and fixed integration boundaries. They read SQLite snapshots and immutable files and publish only under root runtime `analysis/`. No analyzer reads mutable working-tree source.
+The orchestrator calls the three analyzers; analyzers share mapping/parser utilities and fixed integration boundaries. They read SQLite snapshots and immutable files and publish only under root runtime `analysis/`. No analyzer reads mutable working-tree source. The HTTP service executes each orchestration attempt in one child process group; its LLVM and Git descendants inherit that group. The process adapter keeps ownership until every member has exited, including when the Python leader fails first, and applies bounded TERM then KILL cleanup. If termination cannot be confirmed, the scheduler and durable generation remain running, cleanup stays blocked, and no replacement analysis may overwrite ownership of the unresolved group. The failure transition occurs only after absence is proven, so a post-commit persistence exception cannot open the cleanup barrier early. The worker and every controlled subprocess also inherit the parent's `server.lock` lease; an abrupt parent exit therefore leaves runtime ownership attached to the surviving analysis execution. Diagnostic CLIs continue to call the same orchestrator directly while holding the runtime process lock.
 
 After cleanup, `SingleBuildAnalyzer` treats incorporated Runs as one Cycle/Build-scoped validated baseline and merges it only with new profiles from that same Build. Diff and cumulative input validation accept a missing non-coverage artifact only when completion-protected retained evidence authorizes that exact Build role; the selected coverage binary remains mandatory. The input-set identity still contains every Run identity, and the cumulative analyzer continues to consume one independent export per Build. Input orchestration resolves that retained baseline once per Build, avoiding repeated hashes of large immutable exports for each missing raw profile.
 

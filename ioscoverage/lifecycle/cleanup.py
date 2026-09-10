@@ -10,7 +10,11 @@ from pathlib import Path, PurePosixPath
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 from ioscoverage.runtime import RuntimePaths
-from ioscoverage.storage.coverage_store import ARTIFACT_STORAGE_NAMES
+from ioscoverage.analysis.scheduler import AnalysisSchedulerError
+from ioscoverage.storage.coverage_store import (
+    ARTIFACT_STORAGE_NAMES,
+    CoverageStoreMaintenanceCancelled,
+)
 from ioscoverage.storage.reports import CoverageReportError, CoverageReportStore
 from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore, RetainedEvidenceError
 from ioscoverage.lifecycle.runtime_lock import RuntimeLockError, RuntimeProcessLock
@@ -85,7 +89,7 @@ class RuntimeDataCleaner:
                     "service_running", "coverage server or offline analysis is still running"
                 ) from error
         try:
-            return self._run_locked(apply)
+            return self._run_locked(apply, allow_queued_analysis=False)
         except RuntimeCleanupError:
             raise
         except RetainedEvidenceError as error:
@@ -106,7 +110,69 @@ class RuntimeDataCleaner:
             if lock is not None:
                 lock.release()
 
-    def _run_locked(self, apply: bool) -> Dict[str, object]:
+    def run_online(
+        self,
+        process_lock: RuntimeProcessLock,
+        analysis_scheduler: object,
+        coverage_store: object,
+        cancellation_event: object = None,
+    ) -> Dict[str, object]:
+        """Applies cleanup under the server lock, scheduler pause, and storage barrier."""
+
+        if (
+            not process_lock.is_acquired
+            or process_lock.path != self.paths.server_lock.resolve()
+        ):
+            raise RuntimeCleanupError(
+                "runtime_lock_not_owned", "coverage server runtime lock is not owned"
+            )
+        pause = getattr(analysis_scheduler, "pause_and_wait_idle", None)
+        resume = getattr(analysis_scheduler, "resume", None)
+        guard = getattr(coverage_store, "maintenance_guard", None)
+        if not callable(pause) or not callable(resume) or not callable(guard):
+            raise RuntimeCleanupError(
+                "cleanup_coordination_unavailable", "online cleanup coordination is unavailable"
+            )
+        try:
+            pause(cancellation_event)
+        except AnalysisSchedulerError as error:
+            if error.code in (
+                "maintenance_wait_cancelled",
+                "analysis_scheduler_stopping",
+            ):
+                raise RuntimeCleanupError(
+                    "cleanup_cancelled", "runtime cleanup was cancelled before deletion"
+                ) from error
+            raise RuntimeCleanupError(
+                "cleanup_coordination_failed", "online cleanup coordination failed"
+            ) from error
+        try:
+            with guard(cancellation_event):
+                return self._run_locked(True, allow_queued_analysis=True)
+        except CoverageStoreMaintenanceCancelled as error:
+            raise RuntimeCleanupError(
+                "cleanup_cancelled", "runtime cleanup was cancelled before deletion"
+            ) from error
+        except RuntimeCleanupError:
+            raise
+        except RetainedEvidenceError as error:
+            raise RuntimeCleanupError(
+                "retained_evidence_failed", "retained Build evidence could not be published"
+            ) from error
+        except SecureDeletionError as error:
+            raise RuntimeCleanupError(error.code, error.message) from error
+        except sqlite3.Error as error:
+            raise RuntimeCleanupError(
+                "database_read_failed", "coverage lifecycle state could not be verified"
+            ) from error
+        except OSError as error:
+            raise RuntimeCleanupError(
+                "cleanup_io_failed", "runtime cleanup could not complete filesystem changes"
+            ) from error
+        finally:
+            resume()
+
+    def _run_locked(self, apply: bool, allow_queued_analysis: bool) -> Dict[str, object]:
         """Plans and applies while the caller owns the runtime lock when destructive."""
 
         if not self.paths.database.is_file():
@@ -114,11 +180,12 @@ class RuntimeDataCleaner:
         bytes_before = self._managed_bytes()
         unsafe_links = self._unsafe_symlinks()
         snapshot = self._snapshot()
-        active = [state for state in snapshot["states"] if state["status"] in ("queued", "running")]
+        blocked_statuses = ("running",) if allow_queued_analysis else ("queued", "running")
+        active = [state for state in snapshot["states"] if state["status"] in blocked_statuses]
         if apply and unsafe_links:
             raise RuntimeCleanupError("unsafe_runtime_symlink", "runtime data contains a symbolic link")
         if apply and active:
-            raise RuntimeCleanupError("analysis_active", "queued or running analysis prevents cleanup")
+            raise RuntimeCleanupError("analysis_active", "analysis state prevents cleanup")
 
         retained: Set[Path] = set()
         candidates: Dict[Path, CleanupCandidate] = {}
@@ -299,7 +366,7 @@ class RuntimeDataCleaner:
         planned = sorted(candidates.values(), key=self._deletion_order)
         deleted: List[CleanupCandidate] = []
         if apply:
-            self._assert_no_active_analysis()
+            self._assert_no_active_analysis(allow_queued_analysis)
             with SecureRuntimeDeletion(self.root) as secure:
                 self._assert_candidates_unchanged(planned, secure)
                 for cycle_id, build_id, result_dir, removed_roles in evidence_specs:
@@ -319,12 +386,13 @@ class RuntimeDataCleaner:
             len(retained), len(evidence_specs), bytes_before, bytes_after,
         )
 
-    def _assert_no_active_analysis(self) -> None:
+    def _assert_no_active_analysis(self, allow_queued_analysis: bool) -> None:
         """Rechecks scheduler state immediately before evidence publication and deletion."""
 
         snapshot = self._snapshot()
-        if any(state["status"] in ("queued", "running") for state in snapshot["states"]):
-            raise RuntimeCleanupError("analysis_active", "queued or running analysis prevents cleanup")
+        blocked_statuses = ("running",) if allow_queued_analysis else ("queued", "running")
+        if any(state["status"] in blocked_statuses for state in snapshot["states"]):
+            raise RuntimeCleanupError("analysis_active", "analysis state prevents cleanup")
 
     def _snapshot(self) -> Dict[str, List[Dict[str, object]]]:
         """Reads lifecycle identities without changing the database or its schema."""

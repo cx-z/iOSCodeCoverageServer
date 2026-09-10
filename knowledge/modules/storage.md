@@ -21,7 +21,7 @@ No HTTP status selection, browser rendering, LLVM/Git analysis, or GitLab networ
 
 ## Dependency and data
 
-CoverageStore receives immutable `ProjectRegistry` and `XcodeArtifactValidator` collaborators. Build validation resolves Cycle.project to the correct repository and Bundle ID allowlist. It owns one process-local mutation lock; connections are short-lived and never shared across request/worker threads. Runtime files remain below one RuntimePaths root.
+CoverageStore receives immutable `ProjectRegistry` and `XcodeArtifactValidator` collaborators. Build validation resolves Cycle.project to the correct repository and Bundle ID allowlist. It owns one process-local mutation lock; online cleanup takes that same guard only after the analysis worker is paused and idle. Connections are short-lived and never shared across request/worker threads. Runtime files remain below one RuntimePaths root.
 
 Relevant tests live under `tests/storage/`, `tests/server/test_api_contracts.py`, `tests/server/test_automatic_analysis.py`, and analyzer integrity tests.
 

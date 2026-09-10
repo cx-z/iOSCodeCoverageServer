@@ -28,6 +28,8 @@ SQLite 不保存 profraw、profdata、LLVM export、逐行 coverage 或命令输
 
 调度器不在 Condition 锁内执行 SQLite、LLVM、Git、文件 I/O 或外部回调。SQLite connection 不跨线程共享。不同 Cycle 也由同一个 worker 串行分析。
 
+运行数据清理请求会暂停领取新的 generation，并等待当前分析自然完成。清理结束后 queued generation 继续执行；不会中断 LLVM 进程，也不会丢弃或改写 generation。完整协调边界见 [运行数据生命周期](runtime_data_lifecycle.md)。
+
 ## 自动触发边界
 
 触发分析：
@@ -96,7 +98,7 @@ curl --fail-with-body -X POST \
 - 确定性或未知分析失败只执行一次并进入 failed；不修改 Run，不清除 latest success。
 - 新有效 Run 或人工 retry 可以从 failed 请求新 generation。
 - 服务启动把遗留 running 恢复为 queued、清除 running generation 并增加 recovery count；恢复本身不增加 generation，也不循环重试。
-- 服务停止先拒绝新调度并通知 worker，最多等待 30 秒；进程意外中断后由下次启动恢复。
+- 生产环境中的每次 Cycle 编排都在独立进程组内运行，LLVM/Git 子进程属于同一组。即使 Python analysis leader 先异常退出，也会先清理并确认整个进程组为空，再允许 scheduler 进入 idle。若无法确认终止，持久 generation 和 scheduler 都保持 running，阻止后续分析和在线清理；只有进程组被证明消失后，才允许持久化失败并解除运行所有权，因此失败写入在提交后的异常也不能提前打开清理屏障。analysis worker 及受控 Git/LLVM/Xcode 子进程继承同一 `server.lock` lease；父服务被 SIGKILL 或崩溃时，只要分析执行仍存活，新服务和离线清理就不能取得运行目录。SIGTERM 会进入正常协调关停，取消尚在等待 analysis/mutation barrier 的清理、拒绝新调度，并在有界宽限期内先终止活动分析进程组再 join worker；只有确认分析不再访问 runtime 后才释放 `server.lock`。被取消的 running generation 由下次启动恢复为 queued。已进入安全隔离/删除阶段的清理仍会先完整结束。
 - 分析器只读取固定 Git objects、登记产物和快照 Run，不操作工作树。
 
 页面每 2 秒读取本接口，并从独立 Bearer 保护的报告接口获取 latest success。页面刷新不会修改 generation，也不会让 Run 上传等待分析。编排器按 Cycle.project 从 ProjectRegistry 选择仓库。日常流程见 [iOS 真机覆盖率日常使用](daily_workflow.md)。

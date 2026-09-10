@@ -4,13 +4,13 @@
 import argparse
 import logging
 import secrets
+import signal
 import uuid
 from pathlib import Path
 from typing import Callable, Optional
 
-from ioscoverage.analysis.orchestrator import CycleAnalysisOrchestrator
+from ioscoverage.analysis.process_orchestrator import ProcessCycleAnalysisOrchestrator
 from ioscoverage.analysis.scheduler import AnalysisScheduler
-from ioscoverage.analysis.single_build.analyzer import AnalysisConfiguration
 from ioscoverage.integrations.gitlab_mr import GitLabMRClient
 from ioscoverage.integrations.xcode_artifacts import DEFAULT_DEVELOPER_DIR, ArtifactValidationError, XcodeArtifactValidator
 from ioscoverage.projects import ProjectRegistry, ProjectRegistryError
@@ -29,6 +29,11 @@ from ioscoverage.storage.reports import CoverageReportStore
 from ioscoverage.storage.tokens import TokenStore
 from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore
 from ioscoverage.lifecycle.runtime_lock import RuntimeLockError, RuntimeProcessLock
+from ioscoverage.lifecycle.cleanup import RuntimeDataCleaner
+from ioscoverage.lifecycle.manager import (
+    DEFAULT_CLEANUP_INTERVAL_SECONDS,
+    RuntimeCleanupManager,
+)
 
 
 def create_server(
@@ -46,6 +51,9 @@ def create_server(
     start_analysis_scheduler: bool = True,
     run_upload_token: Optional[str] = None,
     gitlab_mr_client: Optional[GitLabMRClient] = None,
+    runtime_process_lock: Optional[RuntimeProcessLock] = None,
+    enable_runtime_cleanup: bool = False,
+    cleanup_interval_seconds: float = DEFAULT_CLEANUP_INTERVAL_SECONDS,
 ) -> ProbeHTTPServer:
     """Creates a server whose mutable paths and projects are startup-fixed."""
 
@@ -58,16 +66,44 @@ def create_server(
     )
     analysis_state_store = AnalysisStateStore(runtime_paths.database)
     report_store = CoverageReportStore(runtime_paths.analysis_dir, analysis_state_store)
-    if analysis_orchestrator_factory is None:
-        analysis_configuration = AnalysisConfiguration(
-            database_path=runtime_paths.database,
-            data_dir=runtime_paths.data_dir,
-            analysis_root=runtime_paths.analysis_dir / "single-build",
-            project_registry=project_registry,
-            developer_dir=(developer_dir or DEFAULT_DEVELOPER_DIR).resolve(),
+    cancel_active_analysis = None
+    active_analysis_check = None
+    if start_analysis_scheduler and analysis_orchestrator_factory is None:
+        process_orchestrator = ProcessCycleAnalysisOrchestrator(
+            runtime_paths.root,
+            project_registry.to_document(),
+            developer_dir or DEFAULT_DEVELOPER_DIR,
+            runtime_lock_descriptor=(
+                runtime_process_lock.lease_descriptor
+                if runtime_process_lock is not None
+                else None
+            ),
         )
-        analysis_orchestrator_factory = lambda: CycleAnalysisOrchestrator(analysis_configuration)
-    scheduler = AnalysisScheduler(analysis_state_store, analysis_orchestrator_factory) if start_analysis_scheduler else None
+        analysis_orchestrator_factory = lambda: process_orchestrator
+        cancel_active_analysis = process_orchestrator.cancel_active
+        active_analysis_check = process_orchestrator.has_active_process_group
+    scheduler = (
+        AnalysisScheduler(
+            analysis_state_store,
+            analysis_orchestrator_factory,
+            cancel_active_analysis=cancel_active_analysis,
+            active_analysis_check=active_analysis_check,
+        )
+        if start_analysis_scheduler
+        else None
+    )
+    cleanup_manager = None
+    if enable_runtime_cleanup:
+        if scheduler is None or runtime_process_lock is None:
+            raise ValueError("automatic cleanup requires the analysis scheduler and runtime lock")
+        cleanup_manager = RuntimeCleanupManager(
+            RuntimeDataCleaner(runtime_paths),
+            runtime_process_lock,
+            scheduler,
+            coverage_store,
+            logger or logging.getLogger("ios_coverage_server.null"),
+            interval_seconds=cleanup_interval_seconds,
+        )
     merge_request_coverage_resolver = (
         MergeRequestCoverageResolver(
             gitlab_mr_client, coverage_store, analysis_state_store, report_store
@@ -86,6 +122,7 @@ def create_server(
         coverage_store=coverage_store,
         analysis_state_store=analysis_state_store,
         analysis_scheduler=scheduler,
+        runtime_cleanup_manager=cleanup_manager,
         run_upload_token=run_upload_token,
         gitlab_mr_client=gitlab_mr_client,
         report_store=report_store,
@@ -105,6 +142,12 @@ def parse_arguments(arguments=None) -> argparse.Namespace:
     parser.add_argument("--max-run-mib", type=int, default=100)
     parser.add_argument("--max-build-artifact-mib", type=int, default=512)
     return parser.parse_args(arguments)
+
+
+def _handle_termination_signal(_signal_number, _frame) -> None:
+    """Converts SIGTERM into the same coordinated shutdown used by Control-C."""
+
+    raise KeyboardInterrupt
 
 
 def main() -> None:
@@ -141,6 +184,7 @@ def main() -> None:
             arguments.max_run_mib * 1024 * 1024,
             arguments.max_build_artifact_mib * 1024 * 1024,
             run_upload_token=run_token, gitlab_mr_client=gitlab_client,
+            runtime_process_lock=runtime_lock, enable_runtime_cleanup=True,
         )
     except (ArtifactValidationError, AnalysisStateStoreError, ProjectRegistryError, RuntimeLockError) as error:
         runtime_lock.release()
@@ -158,14 +202,19 @@ def main() -> None:
     print("Run upload token file: {}".format(paths.run_upload_token), flush=True)
     print("Projects: {}".format(", ".join(item.project for item in registry.projects)), flush=True)
     print("Stop: press Control-C", flush=True)
+    previous_sigterm_handler = signal.signal(signal.SIGTERM, _handle_termination_signal)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         print("\nStopping...", flush=True)
     finally:
-        write_log(logger, "server_stopped", instance_id=server.config.instance_id)
-        server.server_close()
-        runtime_lock.release()
+        try:
+            write_log(logger, "server_stopped", instance_id=server.config.instance_id)
+            server.server_close()
+            runtime_lock.release()
+        finally:
+            signal.signal(signal.SIGTERM, previous_sigterm_handler)
 
 
 if __name__ == "__main__":

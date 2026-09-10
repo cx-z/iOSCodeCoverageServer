@@ -18,6 +18,7 @@ from ioscoverage.server.http.routes.builds import BuildRoutesMixin
 from ioscoverage.server.http.routes.cycles import CycleRoutesMixin
 from ioscoverage.server.http.routes.health import HealthRoutesMixin
 from ioscoverage.server.http.routes.integrations import IntegrationRoutesMixin
+from ioscoverage.server.http.routes.maintenance import MaintenanceRoutesMixin
 from ioscoverage.server.http.routes.pages import PageRoutesMixin
 from ioscoverage.server.http.routes.probes import ProbeRoutesMixin
 from ioscoverage.server.http.routes.reports import ReportRoutesMixin
@@ -39,6 +40,7 @@ class ProbeRequestHandler(
     AnalysisRoutesMixin,
     ReportRoutesMixin,
     IntegrationRoutesMixin,
+    MaintenanceRoutesMixin,
     ProbeRoutesMixin,
     PageRoutesMixin,
     BaseHTTPRequestHandler,
@@ -74,6 +76,11 @@ class ProbeRequestHandler(
             if not self._require_token():
                 return
             self._handle_cycle_list()
+            return
+        if path == "/api/v1/maintenance/cleanup":
+            if not self._require_token():
+                return
+            self._handle_cleanup_get()
             return
         analysis_match = re.fullmatch(r"/api/v1/cycles/([^/]+)/analysis", path)
         if analysis_match:
@@ -131,6 +138,11 @@ class ProbeRequestHandler(
             if not self._require_token():
                 return
             self._handle_analysis_retry(retry_match.group(1))
+            return
+        if path == "/api/v1/maintenance/cleanup":
+            if not self._require_token():
+                return
+            self._handle_cleanup_post()
             return
         if path not in (
             "/api/v1/probes",

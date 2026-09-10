@@ -166,6 +166,20 @@ class ArchitectureCompatibilityTests(unittest.TestCase):
                 with self.subTest(path=path, value=value):
                     self.assertNotIn(value, source)
 
+    def test_analysis_subprocess_boundaries_propagate_runtime_lease(self) -> None:
+        """Keeps parent-crash ownership on every controlled Git and LLVM process."""
+
+        boundaries = (
+            "ioscoverage/analysis/process_orchestrator.py",
+            "ioscoverage/analysis/command_runner.py",
+            "ioscoverage/integrations/git_repository.py",
+            "ioscoverage/integrations/xcode_artifacts.py",
+        )
+        for relative_path in boundaries:
+            with self.subTest(path=relative_path):
+                source = (SOURCE_ROOT / relative_path).read_text(encoding="utf-8")
+                self.assertIn("pass_fds=inherited_descriptors", source)
+
 
 if __name__ == "__main__":
     unittest.main()

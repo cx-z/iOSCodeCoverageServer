@@ -305,6 +305,30 @@ class CoverageReportStoreTests(unittest.TestCase):
             self.fixture.store.get_report(other_cycle)
         self.assertEqual(raised.exception.code, "report_not_available")
 
+    def test_latest_report_read_retries_once_after_generation_advances(self):
+        """Reloads a newer immutable report if cleanup removes the stale selection."""
+
+        current = self.fixture.state_store.get_state(self.fixture.cycle_id)
+        stale = dict(current)
+        stale["latest_success_generation"] = 0
+        stale["latest_success_orchestration_sha256"] = "c" * 64
+        stale["latest_success_cycle_input_sha256"] = "d" * 64
+        stale["latest_success_current_build_id"] = str(uuid.uuid4())
+
+        class AdvancingStateStore:
+            def __init__(inner_self):
+                inner_self.calls = 0
+
+            def get_state(inner_self, cycle_id):
+                inner_self.calls += 1
+                return stale if inner_self.calls == 1 else current
+
+        state_store = AdvancingStateStore()
+        store = CoverageReportStore(self.fixture.analysis, state_store)
+        report = store.get_report(self.fixture.cycle_id)
+        self.assertEqual(report["generation"], current["latest_success_generation"])
+        self.assertEqual(state_store.calls, 2)
+
 
 class CoverageReportHTTPTests(unittest.TestCase):
     """Verifies browser shell, Bearer data boundary, and route safety."""

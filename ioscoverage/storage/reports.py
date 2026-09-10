@@ -104,13 +104,47 @@ class CoverageReportStore:
         }
 
     def _load_latest(self, cycle_id: str) -> Dict[str, object]:
-        """Validates the persisted identity and both immutable completion directories."""
+        """Loads latest success, retrying once if its identity advances during the read."""
 
         cycle_id = self._normalize_uuid(cycle_id)
+        state = self._read_state(cycle_id)
+        for attempt in range(2):
+            identity = self._state_identity(state)
+            try:
+                return self._load_state(cycle_id, state)
+            except CoverageReportError:
+                if attempt != 0:
+                    raise
+                newer_state = self._read_state(cycle_id)
+                if self._state_identity(newer_state) == identity:
+                    raise
+                state = newer_state
+        raise CoverageReportError("report_not_available", "Coverage report is unavailable")
+
+    def _read_state(self, cycle_id: str) -> Mapping[str, object]:
+        """Reads one persisted latest-success pointer as an immutable local snapshot."""
+
         try:
-            state = self.state_store.get_state(cycle_id)
+            return dict(self.state_store.get_state(cycle_id))
         except AnalysisStateStoreError as error:
             raise CoverageReportError(error.code, error.message) from error
+
+    @staticmethod
+    def _state_identity(state: Mapping[str, object]) -> Tuple[object, ...]:
+        """Returns the fields that identify one immutable latest-success generation."""
+
+        return (
+            state.get("latest_success_generation"),
+            state.get("latest_success_orchestration_sha256"),
+            state.get("latest_success_cycle_input_sha256"),
+            state.get("latest_success_current_build_id"),
+        )
+
+    def _load_state(
+        self, cycle_id: str, state: Mapping[str, object]
+    ) -> Dict[str, object]:
+        """Validates both immutable completion directories selected by one state snapshot."""
+
         orchestration_sha = state["latest_success_orchestration_sha256"]
         cycle_input_sha = state["latest_success_cycle_input_sha256"]
         current_build_id = state["latest_success_current_build_id"]

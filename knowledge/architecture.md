@@ -36,7 +36,7 @@ ioscoverage/
     mapping/{coverage_export,source_region}.py
   integrations/                fixed external-tool boundaries
   cli/                         diagnostic CLI presentation
-  lifecycle/                   runtime lock and dependency-driven cleanup
+  lifecycle/                   runtime lock, safe cleanup, and in-process cleanup timer
 ```
 
 `server.py`, the four root analysis scripts, and `cleanup_runtime_data.py` are thin compatibility entry points. `start_coverage_server.sh` delegates to `scripts/start_coverage_server.sh`.
@@ -59,7 +59,7 @@ No lower layer imports an HTTP route. Storage does not depend on Web. Web does n
 
 `ioscoverage.server.deployment` loads the single runtime-root pointer from source-side `config/server.json`. `ioscoverage.server.bootstrap.main` then loads ProjectRegistry and persistent tokens, configures append-only logging, and calls `create_server`. `create_server` initializes the compatible fresh SQLite schema and composes storage, analysis, reports, and HTTP.
 
-`ProbeHTTPServer` owns scheduler start/shutdown. Request threads share immutable dependencies but not SQLite connections. The scheduler owns one worker and each storage operation opens its own connection. The production server process holds `state/server.lock`; formal cleanup must acquire the same lock and therefore runs only after service shutdown.
+`ProbeHTTPServer` owns analysis-scheduler and cleanup-manager start/shutdown. Request threads share immutable dependencies but not SQLite connections. The scheduler owns one generation worker, while each production analysis attempt runs the unchanged orchestrator and all of its LLVM/Git descendants in a dedicated child process group. The cleanup manager owns one startup/periodic/manual maintenance worker. The production process holds `state/server.lock`, and the active analysis execution inherits the same lease through every controlled subprocess boundary. Online cleanup verifies that exact ownership, pauses analysis and waits idle, then takes CoverageStore's mutation guard; it never stops the HTTP listener. Shutdown can cancel either pre-deletion wait, but it never interrupts a cleanup after the destructive guard is acquired. SIGTERM enters coordinated shutdown, which terminates an active analysis process group, joins the scheduler within a bounded grace period, closes the socket, and only then permits bootstrap to release `server.lock`; inability to confirm termination is a shutdown error, not permission to release ownership. On a crash or SIGKILL, surviving analysis descendants retain the lease until they exit. Report loading retries one newer latest-success identity when concurrent cleanup removes its stale immutable selection. Offline `--apply` still requires exclusive ownership and therefore requires service shutdown.
 
 ## Runtime versus source
 

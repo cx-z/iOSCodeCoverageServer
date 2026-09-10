@@ -67,3 +67,16 @@ class RequestMixin:
             return int(raw_value, 10)
         except ValueError:
             return None
+
+    def _has_valid_empty_body_framing(self) -> bool:
+        """Accepts no framing or one numeric zero length and rejects transfer coding."""
+
+        if self.headers.get("Transfer-Encoding") is not None:
+            return False
+        values = self.headers.get_all("Content-Length") or []
+        if not values:
+            return True
+        if len(values) != 1:
+            return False
+        value = values[0].strip()
+        return bool(value) and value.isascii() and not value.strip("0")

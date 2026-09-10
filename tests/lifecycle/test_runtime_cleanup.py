@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import unittest
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -319,6 +320,71 @@ class RuntimeDataCleanerTests(unittest.TestCase):
             self.assertEqual(running.exception.code, "service_running")
         finally:
             lock.release()
+
+    def test_online_cleanup_allows_queued_work_only_under_all_three_barriers(self):
+        """Preserves queued new work while the server owns lock, pause, and mutation guard."""
+
+        self.fixture.state_store.request_analysis(self.fixture.cycle_id, "manual_retry")
+        lock = RuntimeProcessLock(self.fixture.paths.server_lock)
+        lock.acquire()
+
+        class Scheduler:
+            paused = False
+
+            def pause_and_wait_idle(inner_self, cancellation_event=None):
+                inner_self.paused = True
+
+            def resume(inner_self):
+                inner_self.paused = False
+
+        class Store:
+            @contextmanager
+            def maintenance_guard(inner_self, cancellation_event=None):
+                self.assertTrue(scheduler.paused)
+                yield
+
+        scheduler = Scheduler()
+        try:
+            result = RuntimeDataCleaner(self.fixture.paths).run_online(
+                lock, scheduler, Store()
+            )
+        finally:
+            lock.release()
+        self.assertFalse(result["dry_run"])
+        self.assertFalse((self.fixture.run_dir / "payload.profraw").exists())
+        self.assertFalse(scheduler.paused)
+
+    def test_online_cleanup_rejects_running_state_and_unowned_lock(self):
+        """Never treats an active or unowned server process as safe maintenance."""
+
+        cleaner = RuntimeDataCleaner(self.fixture.paths)
+
+        class Scheduler:
+            def pause_and_wait_idle(inner_self, cancellation_event=None):
+                pass
+
+            def resume(inner_self):
+                pass
+
+        class Store:
+            @contextmanager
+            def maintenance_guard(inner_self, cancellation_event=None):
+                yield
+
+        unowned = RuntimeProcessLock(self.fixture.paths.server_lock)
+        with self.assertRaises(RuntimeCleanupError) as missing:
+            cleaner.run_online(unowned, Scheduler(), Store())
+        self.assertEqual(missing.exception.code, "runtime_lock_not_owned")
+
+        self.fixture.state_store.request_analysis(self.fixture.cycle_id, "manual_retry")
+        self.fixture.state_store.claim(self.fixture.cycle_id)
+        unowned.acquire()
+        try:
+            with self.assertRaises(RuntimeCleanupError) as active:
+                cleaner.run_online(unowned, Scheduler(), Store())
+        finally:
+            unowned.release()
+        self.assertEqual(active.exception.code, "analysis_active")
 
     def test_apply_holds_runtime_lock_before_snapshot_and_planning(self):
         """Prevents a server from publishing a newer latest success during planning."""

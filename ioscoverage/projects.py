@@ -74,11 +74,37 @@ class ProjectRegistry:
             raise ProjectRegistryError("project_registry_missing", "projects.json is missing") from error
         except (OSError, UnicodeError, ValueError) as error:
             raise ProjectRegistryError("project_registry_invalid", "projects.json is invalid") from error
+        return cls.from_document(payload)
+
+    @classmethod
+    def from_document(cls, payload: object) -> "ProjectRegistry":
+        """Builds the same strict immutable registry from a trusted transport snapshot."""
+
         if not isinstance(payload, dict) or set(payload) != {"schema_version", "projects"}:
             raise ProjectRegistryError("project_registry_invalid", "projects.json has unknown or missing fields")
         if payload["schema_version"] != 1 or not isinstance(payload["projects"], list):
             raise ProjectRegistryError("project_registry_invalid", "projects.json schema_version must be 1")
         return cls(cls._parse_definition(item) for item in payload["projects"])
+
+    def to_document(self) -> Mapping[str, object]:
+        """Serializes the startup-fixed definitions for the private analysis worker."""
+
+        return {
+            "schema_version": 1,
+            "projects": [
+                {
+                    "project": item.project,
+                    "display_name": item.display_name,
+                    "repository_path": str(item.repository_path),
+                    "gitlab": {
+                        "host": item.gitlab.host,
+                        "project_path": item.gitlab.project_path,
+                    },
+                    "allowed_bundle_ids": list(item.allowed_bundle_ids),
+                }
+                for item in self._definitions
+            ],
+        }
 
     @staticmethod
     def _parse_definition(value: object) -> ProjectDefinition:

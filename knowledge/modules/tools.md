@@ -6,7 +6,7 @@ Expose stable operator commands while keeping implementation in the package.
 
 - Root `server.py` delegates to `ioscoverage.server.bootstrap`; service startup reads `config/server.json` and takes no runtime-root argument.
 - Root `analyze_*.py` delegates to the matching `ioscoverage.cli` module.
-- Root `cleanup_runtime_data.py` delegates to the lifecycle cleanup CLI. It reads `runtime_root` from `config/server.json`, defaults to dry-run, and requires `--apply` for deletion.
+- Root `cleanup_runtime_data.py` delegates to the offline lifecycle CLI. It reads `runtime_root` from `config/server.json`, defaults to dry-run, and requires a stopped server for `--apply`. The running service exposes operator-only maintenance GET/POST for status and immediate asynchronous cleanup.
 - Root `start_coverage_server.sh` delegates to `scripts/start_coverage_server.sh` and is the zero-argument daily entry.
 - `ioscoverage/cli/` owns argument parsing, exit codes, and JSON presentation only; every analyzer accepts `--runtime-root` plus immutable IDs.
 - `scripts/check_public_repository.py` owns the pre-publication scan of tracked and non-ignored untracked files. It reports only relative paths and finding categories.

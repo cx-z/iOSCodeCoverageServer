@@ -2,7 +2,9 @@
 """Unified facade over responsibility-focused coverage persistence mixins."""
 
 import threading
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator, Optional
 
 from ioscoverage.projects import ProjectRegistry, ProjectRegistryError
 from ioscoverage.integrations.xcode_artifacts import XcodeArtifactValidator
@@ -46,6 +48,29 @@ class CoverageStore(
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_schema()
 
+    @contextmanager
+    def maintenance_guard(
+        self, cancellation_event: Optional[threading.Event] = None
+    ) -> Iterator[None]:
+        """Serializes maintenance, cancelling only before the guard is acquired."""
+
+        acquired = False
+        try:
+            if cancellation_event is None:
+                self._mutation_lock.acquire()
+                acquired = True
+            else:
+                while not acquired:
+                    if cancellation_event.is_set():
+                        raise CoverageStoreMaintenanceCancelled()
+                    acquired = self._mutation_lock.acquire(timeout=0.1)
+                if cancellation_event.is_set():
+                    raise CoverageStoreMaintenanceCancelled()
+            yield
+        finally:
+            if acquired:
+                self._mutation_lock.release()
+
     def project_definition(self, project: object):
         """Returns one trusted registered project as a stable storage error."""
 
@@ -53,3 +78,10 @@ class CoverageStore(
             return self.project_registry.require(project)
         except ProjectRegistryError as error:
             raise CoverageStoreError(error.code, error.message) from error
+
+
+class CoverageStoreMaintenanceCancelled(RuntimeError):
+    """Signals cancellation before online cleanup enters its destructive guard."""
+
+    def __init__(self):
+        super().__init__("maintenance wait was cancelled during shutdown")

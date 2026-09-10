@@ -52,7 +52,16 @@ python3 analyze_cycle_latest.py --runtime-root /absolute/runtime --cycle-id <cyc
 
 When the server is running, a Run upload asynchronously triggers the same orchestrator; the CLI does not need to be invoked manually.
 
-Runtime cleanup uses the `runtime_root` already configured in `config/server.json` and is a dry-run unless `--apply` is explicitly supplied. Formal cleanup requires the server to be stopped:
+The production server applies one safe cleanup before it begins serving, then repeats cleanup every 24 hours from that process start. Restarting the server starts a fresh 24-hour timer. Cleanup waits for an active analysis to finish and briefly serializes Cycle/Build/Run writes; health, report, and other read-only HTTP requests remain available. Shutdown cancels cleanup only while it is still waiting for those barriers; once deletion begins, shutdown waits for its quarantine operation to finish. Background Cycle orchestration runs in a dedicated process group so coordinated shutdown can terminate a stuck LLVM/Git execution within a bounded grace period. The analysis execution inherits the runtime process-lock lease, so a crash or forced parent exit cannot let another server or offline cleanup acquire the runtime while analysis remains alive.
+
+An operator can request online cleanup without stopping the server:
+
+```bash
+curl -X POST http://127.0.0.1:8765/api/v1/maintenance/cleanup \
+  -H 'Authorization: Bearer <operator-token>'
+```
+
+The standalone CLI remains available for a read-only audit. Its destructive `--apply` mode is the offline fallback and still requires the server to be stopped:
 
 ```bash
 python3 cleanup_runtime_data.py

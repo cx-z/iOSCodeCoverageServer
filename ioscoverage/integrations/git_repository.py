@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import List
 
+from ioscoverage.lifecycle.runtime_lock import inherited_runtime_lock_descriptors
+
 
 GIT_SHA_PATTERN = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 GIT_COMMAND_TIMEOUT_SECONDS = 10
@@ -83,6 +85,7 @@ class GitRepository:
 
         environment = dict(os.environ)
         environment["GIT_OPTIONAL_LOCKS"] = "0"
+        inherited_descriptors = inherited_runtime_lock_descriptors()
         try:
             result = subprocess.run(
                 ["git", "-C", str(self.path)] + arguments,
@@ -93,6 +96,7 @@ class GitRepository:
                 text=True,
                 timeout=GIT_COMMAND_TIMEOUT_SECONDS,
                 env=environment,
+                pass_fds=inherited_descriptors,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             code = "git_repository_invalid" if startup else "git_repository_unavailable"

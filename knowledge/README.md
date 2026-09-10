@@ -22,7 +22,7 @@ The server receives immutable iOS Build artifacts and user-triggered `.profraw` 
 MR URL -> GitLab read-only MR lookup -> Cycle
 packaging Mac -> Build manifest + Mach-O/dSYM -> storage
 iPhone user upload -> Run metadata + profraw -> storage -> scheduler
-scheduler -> Cycle orchestrator
+scheduler -> process-isolated Cycle orchestrator
   -> per-Build LLVM export
   -> current fixed Git diff
   -> cross-Build source-region accumulation
@@ -49,7 +49,7 @@ See [architecture](architecture.md) for allowed dependencies and [invariants](in
 - Start/diagnose service: configure `config/server.json`, then run `./start_coverage_server.sh`; use `python3 server.py --help` for options
 - Cycle list and report: `/cycles/`
 - Diagnostic analysis only: the four root `analyze_*.py` compatibility commands
-- Runtime cleanup: `python3 cleanup_runtime_data.py` (dry-run), then stop the server before `--apply`
+- Runtime cleanup: automatic at startup and every 24 hours; operator POST `/api/v1/maintenance/cleanup`; offline CLI remains dry-run by default
 - User workflow: `docs/daily_workflow.md`
 - HTTP contract: `docs/api.md`
 

@@ -515,7 +515,43 @@ Build.git_sha             == GitLab.diff_refs.head_sha
 
 该接口只执行固定 GitLab GET 和本地只读查询。它不创建或更新 Cycle，不调度分析，不修改 generation、Build、Run、SQLite 或分析文件。响应不包含 PAT、运行根目录、仓库路径、产物路径、命令或 GitLab 原始响应。
 
-## 7. 大小、原子性和当前边界
+## 7. Runtime cleanup maintenance
+
+The following endpoints require the operator Token. The restricted iOS Run Token returns HTTP 403:
+
+```text
+GET  /api/v1/maintenance/cleanup
+POST /api/v1/maintenance/cleanup
+```
+
+GET returns the process-local startup/periodic/manual cleanup status. POST accepts no request body, queues an asynchronous manual cleanup, and returns HTTP 202 without waiting for analysis or deletion. Repeated requests while cleanup is active are coalesced into one follow-up run. Callers cannot provide a runtime path, deletion path, Cycle, Build, Run, Git identity, or command.
+
+```json
+{
+  "status": "succeeded",
+  "requested_count": 2,
+  "completed_count": 2,
+  "last_trigger": "manual",
+  "pending_trigger": null,
+  "last_started_at": "2026-09-10T08:00:00+00:00",
+  "last_completed_at": "2026-09-10T08:00:01+00:00",
+  "interval_seconds": 86400,
+  "last_result": {
+    "dry_run": false,
+    "planned_deletion": {"run_profraw": {"items": 3, "bytes": 4096}},
+    "actual_deletion": {"run_profraw": {"items": 3, "bytes": 4096}},
+    "planned_release_bytes": 4096,
+    "released_bytes": 4096,
+    "skipped_count": 0,
+    "skipped": []
+  },
+  "error": null
+}
+```
+
+Possible status values are `idle`, `queued`, `running`, `succeeded`, and `failed`. `last_trigger` identifies the active or most recently completed attempt; `pending_trigger` is `manual` when one coalesced follow-up is waiting. `last_result.skipped_count` is the total, while `last_result.skipped` is capped at 20 diagnostic samples. Status resets with the server process; cleanup evidence and immutable coverage reports remain durable. A POST must have no `Transfer-Encoding` and either no `Content-Length` or one valid zero value. Other framing or a nonempty body returns HTTP 400 `request_body_not_allowed`; a server assembled without cleanup returns HTTP 503 `runtime_cleanup_unavailable`.
+
+## 8. 大小、原子性和当前边界
 
 - `--max-file-mib`：网络探针，默认 5 MiB；
 - `--max-run-mib`：单个 `.profraw`，默认 100 MiB；

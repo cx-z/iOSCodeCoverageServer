@@ -12,6 +12,8 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set
 
+from ioscoverage.lifecycle.runtime_lock import inherited_runtime_lock_descriptors
+
 
 DEFAULT_DEVELOPER_DIR = Path("/Applications/Xcode263.app/Contents/Developer")
 TOOL_TIMEOUT_SECONDS = 30
@@ -236,6 +238,7 @@ class XcodeArtifactValidator:
 
         environment = dict(os.environ)
         environment["DEVELOPER_DIR"] = str(self.developer_dir)
+        inherited_descriptors = inherited_runtime_lock_descriptors()
         try:
             if self.command_runner is not None:
                 result = self.command_runner(arguments, TOOL_TIMEOUT_SECONDS)
@@ -249,6 +252,7 @@ class XcodeArtifactValidator:
                     text=True,
                     timeout=TOOL_TIMEOUT_SECONDS,
                     env=environment,
+                    pass_fds=inherited_descriptors,
                 )
         except (OSError, subprocess.TimeoutExpired) as error:
             code = "xcode_toolchain_invalid" if startup else "artifact_tool_unavailable"

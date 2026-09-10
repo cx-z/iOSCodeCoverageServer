@@ -16,7 +16,8 @@ from pathlib import Path
 from tests.helpers import FakeProjectRegistry
 from types import SimpleNamespace
 
-from ioscoverage.analysis.scheduler import AnalysisScheduler
+from ioscoverage.analysis.scheduler import AnalysisScheduler, AnalysisSchedulerError
+from ioscoverage.lifecycle.runtime_lock import RuntimeLockError, RuntimeProcessLock
 from ioscoverage.storage.analysis_state import AnalysisStateStore
 from ioscoverage.storage.coverage_store import CoverageStore
 from ioscoverage.analysis.orchestrator import CycleAnalysisOrchestrationError
@@ -56,6 +57,8 @@ class ControlledOrchestratorFactory:
         self.block_first = False
         self.block_next = False
         self.fail_next = False
+        self.cancelled = False
+        self.cancel_delay = 0.0
 
     def __call__(self):
         """Returns an object exposing the production analyzer's narrow method."""
@@ -79,6 +82,12 @@ class ControlledOrchestratorFactory:
             if should_block:
                 if not self.release.wait(timeout=5):
                     raise RuntimeError("test analyzer release timed out")
+            if self.cancelled:
+                raise CycleAnalysisOrchestrationError(
+                    "orchestration",
+                    "analysis_cancelled",
+                    "fixture analysis was cancelled",
+                )
             if should_fail:
                 raise CycleAnalysisOrchestrationError(
                     "single_build", "fixture_analysis_failed", "fixture analysis failed"
@@ -108,6 +117,14 @@ class ControlledOrchestratorFactory:
         finally:
             with self.lock:
                 self.active -= 1
+
+    def cancel_active(self):
+        """Cooperatively releases the fixture while modeling production cancellation."""
+
+        self.cancelled = True
+        if self.cancel_delay:
+            time.sleep(self.cancel_delay)
+        self.release.set()
 
 
 class StateWorkspace:
@@ -392,6 +409,58 @@ class AnalysisSchedulerTests(unittest.TestCase):
         wait_for_status(self.workspace.store, cycle, "succeeded")
         self.assertNotEqual(request_thread, self.scheduler._worker.ident)
 
+    def test_pause_waits_for_current_analysis_and_defers_next_claim(self):
+        """Lets maintenance wait safely while queued generations remain durable."""
+
+        self.factory.block_first = True
+        self.scheduler.start()
+        first, second = self.workspace.cycle_ids
+        self.scheduler.request_analysis(first, "manual_retry")
+        self.assertTrue(self.factory.started.wait(1))
+        paused = threading.Event()
+
+        def pause():
+            self.scheduler.pause_and_wait_idle()
+            paused.set()
+
+        waiter = threading.Thread(target=pause)
+        waiter.start()
+        self.scheduler.request_analysis(second, "manual_retry")
+        self.assertFalse(paused.wait(0.05))
+        self.factory.release.set()
+        self.assertTrue(paused.wait(1))
+        self.assertEqual(self.workspace.store.get_state(second)["status"], "queued")
+        self.scheduler.resume()
+        waiter.join(timeout=1)
+        self.assertEqual(wait_for_status(self.workspace.store, second, "succeeded")["status"], "succeeded")
+
+    def test_pause_wait_is_cancellable_before_analysis_finishes(self):
+        """Releases the maintenance pause promptly when server shutdown is requested."""
+
+        self.factory.block_first = True
+        self.scheduler.start()
+        cycle = self.workspace.cycle_ids[0]
+        self.scheduler.request_analysis(cycle, "manual_retry")
+        self.assertTrue(self.factory.started.wait(1))
+        cancellation = threading.Event()
+        outcome = []
+
+        def pause():
+            try:
+                self.scheduler.pause_and_wait_idle(cancellation)
+            except AnalysisSchedulerError as error:
+                outcome.append(error.code)
+
+        waiter = threading.Thread(target=pause)
+        waiter.start()
+        time.sleep(0.03)
+        cancellation.set()
+        waiter.join(timeout=0.5)
+        self.assertFalse(waiter.is_alive())
+        self.assertEqual(outcome, ["maintenance_wait_cancelled"])
+        self.factory.release.set()
+        wait_for_status(self.workspace.store, cycle, "succeeded")
+
     def _run_two_cycle_burst(self, use_same_cycle):
         """Queues a blocked first attempt followed by same/different Cycle work."""
 
@@ -558,6 +627,42 @@ class AutomaticAnalysisHTTPTests(unittest.TestCase):
         self.assertLess(elapsed, 1.0)
         self.assertTrue(self.workspace.factory.started.wait(1))
         self.assertEqual(self.workspace.state_store.get_state(self.workspace.cycle_id)["status"], "running")
+
+    def test_runtime_lock_is_held_until_blocked_analysis_worker_stops(self):
+        """Cancels bounded analysis before the owning runtime lock can be released."""
+
+        self.workspace.factory.block_first = True
+        self.workspace.factory.cancel_delay = 0.1
+        self.workspace.scheduler.cancel_active_analysis = self.workspace.factory.cancel_active
+        self.workspace.upload_run()
+        self.assertTrue(self.workspace.factory.started.wait(1))
+        lock_path = self.workspace.root / "state" / "server.lock"
+        owner = RuntimeProcessLock(lock_path)
+        owner.acquire()
+        closed = threading.Event()
+        self.workspace.server.shutdown()
+        self.workspace.thread.join(timeout=1)
+
+        def close_and_release():
+            self.workspace.server.server_close()
+            owner.release()
+            closed.set()
+
+        closer = threading.Thread(target=close_and_release)
+        closer.start()
+        time.sleep(0.03)
+        self.assertFalse(closed.is_set())
+        contender = RuntimeProcessLock(lock_path)
+        with self.assertRaises(RuntimeLockError):
+            contender.acquire()
+        self.assertTrue(closed.wait(1))
+        closer.join(timeout=1)
+        self.assertEqual(
+            self.workspace.state_store.get_state(self.workspace.cycle_id)["status"],
+            "running",
+        )
+        contender.acquire()
+        contender.release()
 
     def test_invalid_run_upload_does_not_trigger(self):
         """Leaves analysis idle when profraw SHA validation fails."""

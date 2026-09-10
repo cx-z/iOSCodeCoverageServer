@@ -5,6 +5,7 @@ import traceback
 from http.server import ThreadingHTTPServer
 from typing import Tuple
 
+from ioscoverage.analysis.scheduler import AnalysisSchedulerError
 from ioscoverage.server.config import ProbeConfig
 from ioscoverage.server.http.router import ProbeRequestHandler
 from ioscoverage.server.logging import write_log
@@ -22,27 +23,49 @@ class ProbeHTTPServer(ThreadingHTTPServer):
         self.config = config
         super().__init__(server_address, ProbeRequestHandler)
         try:
+            if self.config.runtime_cleanup_manager is not None:
+                self.config.analysis_state_store.recover_interrupted()
+                self.config.runtime_cleanup_manager.run_startup_cleanup()
             if self.config.analysis_scheduler is not None:
                 self.config.analysis_scheduler.start()
+            if self.config.runtime_cleanup_manager is not None:
+                self.config.runtime_cleanup_manager.start()
         except Exception:
+            if self.config.analysis_scheduler is not None:
+                completed = self.config.analysis_scheduler.shutdown(timeout=30.0)
+            else:
+                completed = True
             super().server_close()
+            if not completed:
+                raise AnalysisSchedulerError(
+                    "analysis_shutdown_incomplete",
+                    "background analysis could not be stopped safely",
+                )
             raise
 
     def server_close(self) -> None:
-        """Stops scheduling and boundedly waits for an in-flight immutable publication."""
+        """Closes the listener but retains lifecycle ownership until workers stop."""
 
+        completed = True
         try:
+            if self.config.runtime_cleanup_manager is not None:
+                self.config.runtime_cleanup_manager.shutdown()
             if self.config.analysis_scheduler is not None:
                 completed = self.config.analysis_scheduler.shutdown(timeout=30.0)
                 if not completed:
                     write_log(
                         self.config.logger,
-                        "analysis_worker_shutdown_deferred",
+                        "analysis_worker_shutdown_incomplete",
                         level=logging.WARNING,
                         running_cycle=self.config.analysis_scheduler.running_cycle,
                     )
         finally:
             super().server_close()
+        if not completed:
+            raise AnalysisSchedulerError(
+                "analysis_shutdown_incomplete",
+                "background analysis could not be stopped safely",
+            )
 
     def handle_error(self, request: object, client_address: Tuple[str, int]) -> None:
         """Persists uncaught request failures so terminal access is not required."""
