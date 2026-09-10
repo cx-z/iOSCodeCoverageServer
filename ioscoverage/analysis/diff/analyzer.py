@@ -32,6 +32,7 @@ from ioscoverage.analysis.diff.git_diff_parser import (
 )
 from ioscoverage.integrations.git_repository import GIT_SHA_PATTERN
 from ioscoverage.analysis.single_build.analyzer import AnalysisConfiguration
+from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore
 
 
 DIFF_ANALYSIS_SCHEMA_VERSION = 1
@@ -69,12 +70,16 @@ class SingleBuildDiffAnalyzer:
         self,
         configuration: AnalysisConfiguration,
         command_runner_factory: Callable[[Path, Path], object] = EvidenceCommandRunner,
+        retained_evidence_store: Optional[RetainedBuildEvidenceStore] = None,
     ):
         """Retains only installation-owned paths and an injectable no-shell runner."""
 
         self.configuration = configuration
         self.command_runner_factory = command_runner_factory
         self.diff_analysis_root = configuration.analysis_root.parent / "single-build-diff"
+        self.retained_evidence_store = retained_evidence_store or RetainedBuildEvidenceStore(
+            configuration.analysis_root.parent
+        )
 
     def analyze(
         self, cycle_id: str, build_id: str, input_set_sha256: str
@@ -304,17 +309,6 @@ class SingleBuildDiffAnalyzer:
                 raise SingleBuildDiffAnalysisError(
                     "artifact_database_mismatch", field_name + " differs from SQLite"
                 )
-            size, sha256 = self._file_identity(
-                artifact_root / ARTIFACT_STORAGE_NAMES[field_name], field_name + " artifact"
-            )
-            if size != expected_size:
-                raise SingleBuildDiffAnalysisError(
-                    "artifact_size_mismatch", field_name + " size differs from manifest"
-                )
-            if sha256 != expected_sha:
-                raise SingleBuildDiffAnalysisError(
-                    "artifact_sha256_mismatch", field_name + " SHA-256 differs from manifest"
-                )
             try:
                 database_uuids = json.loads(str(build[field_name + "_uuids_json"]))
             except (KeyError, TypeError, json.JSONDecodeError) as error:
@@ -324,6 +318,27 @@ class SingleBuildDiffAnalyzer:
             if database_uuids != uuids.get(field_name):
                 raise SingleBuildDiffAnalysisError(
                     "artifact_uuid_mismatch", field_name + " UUIDs differ from SQLite"
+                )
+            artifact_path = artifact_root / ARTIFACT_STORAGE_NAMES[field_name]
+            if (
+                not artifact_path.exists()
+                and not artifact_path.is_symlink()
+                and field_name != coverage_binary
+                and self.retained_evidence_store.build_artifact_is_retained(
+                    cycle_id, build_id, build.get("manifest_sha256"), field_name
+                )
+            ):
+                continue
+            size, sha256 = self._file_identity(
+                artifact_path, field_name + " artifact"
+            )
+            if size != expected_size:
+                raise SingleBuildDiffAnalysisError(
+                    "artifact_size_mismatch", field_name + " size differs from manifest"
+                )
+            if sha256 != expected_sha:
+                raise SingleBuildDiffAnalysisError(
+                    "artifact_sha256_mismatch", field_name + " SHA-256 differs from manifest"
                 )
         return build, manifest
 

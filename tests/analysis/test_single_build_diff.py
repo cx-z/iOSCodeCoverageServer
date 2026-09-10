@@ -28,6 +28,7 @@ from ioscoverage.analysis.diff.analyzer import (
     SingleBuildDiffAnalysisError,
     SingleBuildDiffAnalyzer,
 )
+from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore
 
 
 class FakeGitController:
@@ -200,6 +201,41 @@ class SingleBuildDiffAnalyzerTests(unittest.TestCase):
         self.assertEqual(result.summary["lines"]["deleted_excluded"], 1)
         details = json.loads((result.output_directory / "changed-line-coverage.json").read_text())
         self.assertEqual([line["state"] for line in details["lines"]], ["covered", "uncovered", "not_measurable"])
+
+    def test_retained_dsym_can_be_absent_after_safe_cleanup(self) -> None:
+        """Consumes a verified LLVM result after retained evidence authorizes dSYM removal."""
+
+        evidence = RetainedBuildEvidenceStore(self.analysis_root.parent)
+        evidence.publish(
+            self.cycle_id, self.build_id, self._single_result_dir(), ["dsym"]
+        )
+        (self.data_dir / "cycles" / self.cycle_id / "builds" / self.build_id
+         / "artifacts" / "dsym.zip").unlink()
+
+        result = self.analyzer().analyze(
+            self.cycle_id, self.build_id, self.input_sha
+        )
+
+        self.assertEqual(result.summary["status"], "complete")
+
+    def test_retained_evidence_never_authorizes_missing_coverage_binary(self) -> None:
+        """Keeps the selected Mach-O mandatory even after noncoverage artifacts are compacted."""
+
+        evidence = RetainedBuildEvidenceStore(self.analysis_root.parent)
+        evidence.publish(
+            self.cycle_id, self.build_id, self._single_result_dir(), ["dsym"]
+        )
+        artifacts = (
+            self.data_dir / "cycles" / self.cycle_id / "builds" / self.build_id
+            / "artifacts"
+        )
+        (artifacts / "dsym.zip").unlink()
+        (artifacts / "main_executable.bin").unlink()
+
+        with self.assertRaises(SingleBuildDiffAnalysisError) as caught:
+            self.analyzer().analyze(self.cycle_id, self.build_id, self.input_sha)
+
+        self.assertEqual(caught.exception.code, "stored_file_missing")
 
     def test_name_status_parses_added_modified_and_renamed_files(self) -> None:
         """Parses NUL-delimited A/M/R identities without splitting path spaces."""
@@ -620,6 +656,12 @@ class SingleBuildDiffAnalyzerTests(unittest.TestCase):
                 "target_sha_at_build": self.target_sha,
                 "merge_base_sha": self.merge_base,
                 "manifest_sha256": self._manifest_sha(),
+                "coverage_binary": "main_executable",
+                "actual_macho_uuids": {
+                    "main_executable": [self.macho_uuid],
+                    "dsym": [self.macho_uuid],
+                },
+                "manifest": self._manifest(),
             },
             "runs": [],
         }
@@ -641,6 +683,7 @@ class SingleBuildDiffAnalyzerTests(unittest.TestCase):
             ("llvm-cov-export.json", export_payload),
         ):
             (directory / name).write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
+        (directory / "merged.profdata").write_bytes(b"merged-profile")
         outputs = self._output_identities(directory)
         completion = {
             "schema_version": 1,
@@ -675,6 +718,13 @@ class SingleBuildDiffAnalyzerTests(unittest.TestCase):
 
         with sqlite3.connect(str(self.database)) as connection:
             return str(connection.execute("SELECT manifest_sha256 FROM builds").fetchone()[0])
+
+    def _manifest(self) -> Dict[str, object]:
+        """Returns the stored immutable Build manifest used by retained evidence."""
+
+        with sqlite3.connect(str(self.database)) as connection:
+            encoded = str(connection.execute("SELECT manifest_json FROM builds").fetchone()[0])
+        return json.loads(encoded)
 
     def _output_identities(self, directory: Path) -> Dict[str, Dict[str, object]]:
         """Hashes every prior result file except completion.json."""

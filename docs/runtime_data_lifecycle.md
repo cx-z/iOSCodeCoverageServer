@@ -28,6 +28,8 @@ When a later Run arrives for that Build, the analyzer validates the retained bas
 
 The exact `coverage_binary` remains stored because a later same-Build Run still needs it for `llvm-cov export`. dSYM and any non-coverage Mach-O can be removed after the original artifact validation and complete single-Build result are bound into retained evidence.
 
+Downstream diff and cumulative validation continue to verify the immutable Build manifest, SQLite descriptors, UUID metadata, completed LLVM result, and coverage binary. A missing dSYM or other non-coverage Mach-O is accepted only when valid retained evidence for the same Cycle, Build, manifest, and artifact role proves that cleanup intentionally removed it.
+
 ## Retention set
 
 The cleanup planner protects:

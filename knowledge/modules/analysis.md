@@ -23,6 +23,6 @@ No HTTP parsing, Run upload, schema migration, Token handling, Git checkout/work
 
 The orchestrator calls the three analyzers; analyzers share mapping/parser utilities and fixed integration boundaries. They read SQLite snapshots and immutable files and publish only under root runtime `analysis/`. No analyzer reads mutable working-tree source.
 
-After cleanup, `SingleBuildAnalyzer` treats incorporated Runs as one Cycle/Build-scoped validated baseline and merges it only with new profiles from that same Build. The input-set identity still contains every Run identity; the cumulative analyzer continues to consume one independent export per Build. Input orchestration resolves that retained baseline once per Build, avoiding repeated hashes of large immutable exports for each missing raw profile.
+After cleanup, `SingleBuildAnalyzer` treats incorporated Runs as one Cycle/Build-scoped validated baseline and merges it only with new profiles from that same Build. Diff and cumulative input validation accept a missing non-coverage artifact only when completion-protected retained evidence authorizes that exact Build role; the selected coverage binary remains mandatory. The input-set identity still contains every Run identity, and the cumulative analyzer continues to consume one independent export per Build. Input orchestration resolves that retained baseline once per Build, avoiding repeated hashes of large immutable exports for each missing raw profile.
 
 Tests are under `tests/analysis/`, with scheduler integration under `tests/server/test_automatic_analysis.py`.
