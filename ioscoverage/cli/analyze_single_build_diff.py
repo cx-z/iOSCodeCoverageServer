@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import List, Optional
 
 from ioscoverage.analysis.single_build.analyzer import AnalysisConfiguration, SingleBuildAnalysisError
+from ioscoverage.lifecycle.runtime_lock import RuntimeLockError, RuntimeProcessLock
+from ioscoverage.runtime import RuntimePaths
 from ioscoverage.analysis.diff.analyzer import (
     SingleBuildDiffAnalysisError,
     SingleBuildDiffAnalyzer,
@@ -35,9 +37,10 @@ def main(arguments: Optional[List[str]] = None) -> int:
     parsed = parse_arguments(arguments)
     try:
         configuration = AnalysisConfiguration.for_runtime_root(parsed.runtime_root)
-        result = SingleBuildDiffAnalyzer(configuration).analyze(
-            parsed.cycle_id, parsed.build_id, parsed.input_set_sha256
-        )
+        with RuntimeProcessLock(RuntimePaths.from_root(parsed.runtime_root).server_lock):
+            result = SingleBuildDiffAnalyzer(configuration).analyze(
+                parsed.cycle_id, parsed.build_id, parsed.input_set_sha256
+            )
     except (SingleBuildDiffAnalysisError, SingleBuildAnalysisError) as error:
         print(
             json.dumps(
@@ -48,6 +51,16 @@ def main(arguments: Optional[List[str]] = None) -> int:
             file=sys.stderr,
         )
         return error.exit_code
+    except RuntimeLockError as error:
+        print(
+            json.dumps(
+                {"status": "failed", "error": "runtime_busy", "message": str(error)},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 3
     print(
         json.dumps(
             {

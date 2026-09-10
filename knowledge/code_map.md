@@ -16,4 +16,5 @@
 | Token permission is wrong | `modules/server.md` | `ioscoverage/server/http/auth.py`, `ioscoverage/storage/tokens.py` | `tests/storage/test_tokens.py`, server tests | `docs/api.md` |
 | SQLite/file integrity issue | `modules/storage.md` | `ioscoverage/storage/database.py`, `ioscoverage/storage/schema.py`, `ioscoverage/storage/artifact_files.py`, resource modules | storage assertions in server/analysis tests | `knowledge/invariants.md` |
 | CLI debugging | `modules/tools.md` | `ioscoverage/cli/`, root wrappers | `tests/test_architecture.py`, relevant analyzer tests | `docs/*_cli.md` |
+| Runtime growth or safe cleanup | `workflows/runtime_cleanup.md`, `modules/storage.md`, `modules/analysis.md` | `ioscoverage/lifecycle/cleanup.py`, `ioscoverage/storage/retained_evidence.py` | `tests/lifecycle/test_runtime_cleanup.py`, `tests/analysis/test_single_build.py` | `docs/runtime_data_lifecycle.md` |
 | Public repository check fails | `modules/tools.md`, `invariants.md` | `scripts/check_public_repository.py`, `.gitignore` | `tests/test_public_repository_check.py`, `tests/test_architecture.py` | `README.md`, `docs/runtime_deployment.md` |

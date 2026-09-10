@@ -24,6 +24,7 @@ ioscoverage/
     {database,schema,cycles,builds,runs,artifact_files,validation}.py
     analysis_state.py
     reports.py
+    retained_evidence.py
     tokens.py
   analysis/                    offline and background analysis implementation
     scheduler.py
@@ -35,9 +36,10 @@ ioscoverage/
     mapping/{coverage_export,source_region}.py
   integrations/                fixed external-tool boundaries
   cli/                         diagnostic CLI presentation
+  lifecycle/                   runtime lock and dependency-driven cleanup
 ```
 
-`server.py` and the four root analysis scripts are thin compatibility entry points. `start_coverage_server.sh` delegates to `scripts/start_coverage_server.sh`.
+`server.py`, the four root analysis scripts, and `cleanup_runtime_data.py` are thin compatibility entry points. `start_coverage_server.sh` delegates to `scripts/start_coverage_server.sh`.
 
 ## Dependency direction
 
@@ -49,6 +51,7 @@ ioscoverage/
 - `analysis` reads immutable database/file identities and fixed Git objects. The scheduler invokes the orchestrator, which reuses the single-Build, diff, and cumulative analyzers.
 - `integrations` owns subprocess/network boundaries for project-selected Git, Xcode artifacts, and registered GitLab MR GET.
 - `cli` validates command arguments and formats results; it does not duplicate analysis logic.
+- `lifecycle` verifies the latest report graph, coordinates the server process lock, publishes retained same-Build evidence, and removes only proven redundant runtime paths.
 
 No lower layer imports an HTTP route. Storage does not depend on Web. Web does not depend on storage. Analysis never depends on a browser renderer.
 
@@ -56,7 +59,7 @@ No lower layer imports an HTTP route. Storage does not depend on Web. Web does n
 
 `ioscoverage.server.deployment` loads the single runtime-root pointer from source-side `config/server.json`. `ioscoverage.server.bootstrap.main` then loads ProjectRegistry and persistent tokens, configures append-only logging, and calls `create_server`. `create_server` initializes the compatible fresh SQLite schema and composes storage, analysis, reports, and HTTP.
 
-`ProbeHTTPServer` owns scheduler start/shutdown. Request threads share immutable dependencies but not SQLite connections. The scheduler owns one worker and each storage operation opens its own connection.
+`ProbeHTTPServer` owns scheduler start/shutdown. Request threads share immutable dependencies but not SQLite connections. The scheduler owns one worker and each storage operation opens its own connection. The production server process holds `state/server.lock`; formal cleanup must acquire the same lock and therefore runs only after service shutdown.
 
 ## Runtime versus source
 

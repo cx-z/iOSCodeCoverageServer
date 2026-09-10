@@ -56,6 +56,7 @@ class RuntimeAndProjectRegistryTests(unittest.TestCase):
         self.assertEqual(paths.operator_token, paths.root / "state" / "operator_token")
         self.assertEqual(paths.run_upload_token, paths.root / "state" / "run_upload_token")
         self.assertEqual(paths.gitlab_token, paths.root / "state" / "gitlab_api_token")
+        self.assertEqual(paths.server_lock, paths.root / "state" / "server.lock")
         self.assertEqual(paths.server_log, paths.root / "logs" / "server.log")
 
     def test_filesystem_root_cannot_be_used_as_runtime_root(self):

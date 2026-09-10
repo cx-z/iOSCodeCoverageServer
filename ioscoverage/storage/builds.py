@@ -344,12 +344,18 @@ class BuildStoreMixin:
         """Prevents a duplicate response from hiding missing immutable Build artifacts."""
 
         base = self._build_directory(cycle_id, build_id)
-        required = [base / "manifest.json"]
-        required.extend(
-            base / "artifacts" / ARTIFACT_STORAGE_NAMES[field_name]
-            for field_name in artifact_fields
-        )
-        if not all(path.is_file() for path in required):
+        if not (base / "manifest.json").is_file():
+            raise CoverageStoreError("stored_file_missing", "registered Build artifact is missing")
+        row = self._find_build(build_id)
+        evidence_store = getattr(self, "retained_evidence_store", None)
+        for field_name in artifact_fields:
+            path = base / "artifacts" / ARTIFACT_STORAGE_NAMES[field_name]
+            if path.is_file():
+                continue
+            if row is not None and evidence_store is not None and evidence_store.build_artifact_is_retained(
+                cycle_id, build_id, row["manifest_sha256"], field_name
+            ):
+                continue
             raise CoverageStoreError("stored_file_missing", "registered Build artifact is missing")
     def _find_build(self, build_id: str) -> Optional[sqlite3.Row]:
         """Reads Build metadata without converting JSON columns."""

@@ -11,6 +11,8 @@ from ioscoverage.analysis.orchestrator import (
     CycleAnalysisOrchestrator,
 )
 from ioscoverage.analysis.single_build.analyzer import AnalysisConfiguration, SingleBuildAnalysisError
+from ioscoverage.lifecycle.runtime_lock import RuntimeLockError, RuntimeProcessLock
+from ioscoverage.runtime import RuntimePaths
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,7 +32,8 @@ def main(arguments: Optional[Sequence[str]] = None) -> int:
     parsed = build_parser().parse_args(arguments)
     try:
         configuration = AnalysisConfiguration.for_runtime_root(parsed.runtime_root)
-        result = CycleAnalysisOrchestrator(configuration).analyze(parsed.cycle_id)
+        with RuntimeProcessLock(RuntimePaths.from_root(parsed.runtime_root).server_lock):
+            result = CycleAnalysisOrchestrator(configuration).analyze(parsed.cycle_id)
     except (CycleAnalysisOrchestrationError, SingleBuildAnalysisError) as error:
         stage = getattr(error, "stage", "configuration")
         print(
@@ -45,6 +48,19 @@ def main(arguments: Optional[Sequence[str]] = None) -> int:
             )
         )
         return error.exit_code
+    except RuntimeLockError as error:
+        print(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "failure_stage": "runtime_lock",
+                    "error": "runtime_busy",
+                    "message": str(error),
+                },
+                sort_keys=True,
+            )
+        )
+        return 3
     print(
         json.dumps(
             {

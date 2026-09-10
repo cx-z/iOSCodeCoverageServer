@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import List, Optional
 
 from ioscoverage.integrations.git_repository import GitRepositoryError
+from ioscoverage.lifecycle.runtime_lock import RuntimeLockError, RuntimeProcessLock
+from ioscoverage.runtime import RuntimePaths
 from ioscoverage.analysis.single_build.analyzer import (
     AnalysisConfiguration,
     SingleBuildAnalysisError,
@@ -40,8 +42,9 @@ def main(arguments: Optional[List[str]] = None) -> int:
     parsed = parse_arguments(arguments)
     try:
         configuration = AnalysisConfiguration.for_runtime_root(parsed.runtime_root)
-        analyzer = SingleBuildAnalyzer(configuration)
-        result = analyzer.analyze(parsed.cycle_id, parsed.build_id, parsed.run_ids)
+        with RuntimeProcessLock(RuntimePaths.from_root(parsed.runtime_root).server_lock):
+            analyzer = SingleBuildAnalyzer(configuration)
+            result = analyzer.analyze(parsed.cycle_id, parsed.build_id, parsed.run_ids)
     except SingleBuildAnalysisError as error:
         print(
             json.dumps(
@@ -56,6 +59,16 @@ def main(arguments: Optional[List[str]] = None) -> int:
         print(
             json.dumps(
                 {"status": "failed", "error": error.code, "message": error.message},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 3
+    except RuntimeLockError as error:
+        print(
+            json.dumps(
+                {"status": "failed", "error": "runtime_busy", "message": str(error)},
                 ensure_ascii=False,
                 sort_keys=True,
             ),

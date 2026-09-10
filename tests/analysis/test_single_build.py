@@ -18,6 +18,7 @@ from ioscoverage.analysis.single_build.analyzer import (
     SingleBuildAnalysisError,
     SingleBuildAnalyzer,
 )
+from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore
 
 
 class FakeRepository:
@@ -418,6 +419,28 @@ class SingleBuildAnalyzerTests(unittest.TestCase):
         second = self.analyzer().analyze(self.cycle_id, self.build_id, self.run_ids)
         self.assertNotEqual(first.input_set_sha256, second.input_set_sha256)
         self.assertNotEqual(first.output_directory, second.output_directory)
+
+    def test_retained_same_build_baseline_merges_only_new_raw_profile(self) -> None:
+        """Keeps old hits after profraw/dSYM cleanup without cross-Build profile merging."""
+
+        first = self.analyzer().analyze(self.cycle_id, self.build_id, self.run_ids)
+        evidence = RetainedBuildEvidenceStore(self.analysis_root.parent)
+        evidence.publish(self.cycle_id, self.build_id, first.output_directory, ["dsym"])
+        for run_id in self.run_ids:
+            (self._run_directory(run_id) / "payload.profraw").unlink()
+        (self._build_directory() / "artifacts" / "dsym.zip").unlink()
+        new_run = str(uuid.uuid4())
+        self._create_run(new_run, b"profile-new")
+        result = self.analyzer().analyze(
+            self.cycle_id, self.build_id, self.run_ids + [new_run]
+        )
+        labels = self.tools.runners[-1].labels
+        self.assertIn("llvm-profdata-show-retained-baseline", labels)
+        self.assertEqual(sum(label.startswith("llvm-profdata-show-run") for label in labels), 1)
+        merge = next(record for record in self.tools.runners[-1].records if record["label"] == "llvm-profdata-merge")
+        self.assertIn(str(first.output_directory / "merged.profdata"), merge["arguments"])
+        self.assertIn(str(self._run_directory(new_run) / "payload.profraw"), merge["arguments"])
+        self.assertEqual(result.summary["profraw_count"], 3)
 
     def _create_database(self) -> None:
         """Creates only the production columns read by the analyzer."""

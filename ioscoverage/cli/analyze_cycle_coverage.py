@@ -9,6 +9,8 @@ from typing import Dict, List, Optional
 
 from ioscoverage.analysis.cumulative.analyzer import CycleCoverageAnalysisError, CycleCoverageAnalyzer
 from ioscoverage.analysis.single_build.analyzer import AnalysisConfiguration, SingleBuildAnalysisError
+from ioscoverage.lifecycle.runtime_lock import RuntimeLockError, RuntimeProcessLock
+from ioscoverage.runtime import RuntimePaths
 
 
 def parse_arguments(arguments: Optional[List[str]] = None) -> argparse.Namespace:
@@ -67,9 +69,10 @@ def main(arguments: Optional[List[str]] = None) -> int:
     try:
         build_inputs = parse_build_inputs(parsed.build_input)
         configuration = AnalysisConfiguration.for_runtime_root(parsed.runtime_root)
-        result = CycleCoverageAnalyzer(configuration).analyze(
-            parsed.cycle_id, parsed.current_build_id, build_inputs
-        )
+        with RuntimeProcessLock(RuntimePaths.from_root(parsed.runtime_root).server_lock):
+            result = CycleCoverageAnalyzer(configuration).analyze(
+                parsed.cycle_id, parsed.current_build_id, build_inputs
+            )
     except (CycleCoverageAnalysisError, SingleBuildAnalysisError) as error:
         print(
             json.dumps(
@@ -80,6 +83,16 @@ def main(arguments: Optional[List[str]] = None) -> int:
             file=sys.stderr,
         )
         return error.exit_code
+    except RuntimeLockError as error:
+        print(
+            json.dumps(
+                {"status": "failed", "error": "runtime_busy", "message": str(error)},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
+        return 3
     print(
         json.dumps(
             {

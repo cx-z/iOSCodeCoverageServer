@@ -462,6 +462,40 @@ class CycleAnalysisOrchestratorTests(unittest.TestCase):
         path.write_bytes(b"changed")
         self._assert_failure(self.workspace.orchestrator()[0], "run_validation", "profraw_identity_mismatch")
 
+    def test_retained_baseline_is_resolved_once_per_build(self):
+        """Avoids repeatedly hashing one large retained export for every missing Run."""
+
+        second_run = "10000000-0000-4000-8000-000000000002"
+        self.workspace.add_run(self.workspace.build_a, second_run, b"A2")
+        run_root = self.workspace.data / "cycles" / self.workspace.cycle_id / "runs"
+        for run_id in ("10000000-0000-4000-8000-000000000001", second_run):
+            (run_root / run_id / "payload.profraw").unlink()
+
+        class CountingEvidenceStore:
+            def __init__(self):
+                self.find_calls = []
+                self.match_calls = []
+
+            def find_compatible(self, cycle_id, build_id, manifest_sha256, runs):
+                self.find_calls.append((build_id, tuple(run["id"] for run in runs)))
+                return object() if build_id == OrchestrationWorkspace.build_a else None
+
+            def run_matches(self, evidence, run):
+                self.match_calls.append(run["id"])
+                return True
+
+        orchestrator = self.workspace.orchestrator()[0]
+        evidence = CountingEvidenceStore()
+        orchestrator.retained_evidence_store = evidence
+        snapshot = orchestrator._load_snapshot(self.workspace.cycle_id)
+        selection = orchestrator._select_inputs(snapshot)
+        orchestrator._validate_selected_files(selection)
+
+        self.assertEqual(
+            sum(call[0] == self.workspace.build_a for call in evidence.find_calls), 1
+        )
+        self.assertEqual(len(evidence.match_calls), 2)
+
     def test_build_manifest_damage_is_rejected(self):
         """Rejects Build bytes that no longer match immutable SQLite identity."""
 

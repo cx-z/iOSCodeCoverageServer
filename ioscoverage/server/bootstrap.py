@@ -27,6 +27,8 @@ from ioscoverage.storage.analysis_state import AnalysisStateStore, AnalysisState
 from ioscoverage.storage.coverage_store import CoverageStore
 from ioscoverage.storage.reports import CoverageReportStore
 from ioscoverage.storage.tokens import TokenStore
+from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore
+from ioscoverage.lifecycle.runtime_lock import RuntimeLockError, RuntimeProcessLock
 
 
 def create_server(
@@ -49,8 +51,10 @@ def create_server(
 
     runtime_paths.prepare_directories()
     artifact_validator = XcodeArtifactValidator(developer_dir or DEFAULT_DEVELOPER_DIR)
+    retained_evidence_store = RetainedBuildEvidenceStore(runtime_paths.analysis_dir)
     coverage_store = CoverageStore(
-        runtime_paths.database, runtime_paths.data_dir, project_registry, artifact_validator
+        runtime_paths.database, runtime_paths.data_dir, project_registry, artifact_validator,
+        retained_evidence_store=retained_evidence_store,
     )
     analysis_state_store = AnalysisStateStore(runtime_paths.database)
     report_store = CoverageReportStore(runtime_paths.analysis_dir, analysis_state_store)
@@ -128,7 +132,9 @@ def main() -> None:
         raise SystemExit("operator and Run upload tokens must be different")
     gitlab_client = GitLabMRClient(paths.gitlab_token, registry)
     logger = configure_logging(paths.server_log)
+    runtime_lock = RuntimeProcessLock(paths.server_lock)
     try:
+        runtime_lock.acquire()
         server = create_server(
             arguments.host, arguments.port, operator_token, paths, registry,
             arguments.max_file_mib * 1024 * 1024, logger,
@@ -136,7 +142,8 @@ def main() -> None:
             arguments.max_build_artifact_mib * 1024 * 1024,
             run_upload_token=run_token, gitlab_mr_client=gitlab_client,
         )
-    except (ArtifactValidationError, AnalysisStateStoreError, ProjectRegistryError) as error:
+    except (ArtifactValidationError, AnalysisStateStoreError, ProjectRegistryError, RuntimeLockError) as error:
+        runtime_lock.release()
         raise SystemExit(getattr(error, "message", str(error)))
     write_log(logger, "server_started", host=arguments.host, port=server.server_port,
               runtime_root=str(paths.root), project_count=len(registry.projects),
@@ -158,6 +165,7 @@ def main() -> None:
     finally:
         write_log(logger, "server_stopped", instance_id=server.config.instance_id)
         server.server_close()
+        runtime_lock.release()
 
 
 if __name__ == "__main__":

@@ -25,6 +25,8 @@ These rules are ordinary-task stop conditions. A change that needs to violate on
 - `not_measurable`, `unknown`, and deleted lines do not enter the measurable coverage denominator.
 - Analysis failure keeps durable Runs and the previous latest success.
 - Immutable analysis output is reusable only after its completion manifest and file identities validate.
+- Incorporated raw profiles may be removed only after a crash-durable retained baseline binds the exact Cycle, Build, input set, and Run identities to an intact `merged.profdata` and LLVM export. Existing evidence must be re-fsynced before it can authorize retry deletion. A later Run merges with that baseline only inside the same Build.
+- The exact coverage binary remains available for future same-Build exports. Historical inheritance continues to consume independently produced per-Build exports and the existing strict Git/region proof.
 
 ## Scheduling and security
 
@@ -37,3 +39,4 @@ These rules are ordinary-task stop conditions. A change that needs to violate on
 - Callers cannot supply arbitrary repository, command, Git ref, artifact, report, or output paths.
 - Public source and examples contain only fictional project identities. Real ProjectRegistry data, credentials, SQLite files, profiles, logs, and analysis output remain untracked deployment data.
 - A publication candidate must pass `scripts/check_public_repository.py`, which scans tracked and non-ignored untracked files without printing matched secret bytes.
+- Destructive cleanup is dependency-driven, confined to `RuntimePaths.root`, rejects symlinks, and holds the shared runtime lock from before snapshot/planning through publication/deletion. Final traversal uses no-follow descriptors rooted at one opened runtime directory. Every candidate is atomically isolated into an invocation-private quarantine, then the exact file identity or complete directory-tree identity is revalidated before removal; a prior path or inode check never directly authorizes a later name-based unlink. Latest success is validated by exact result kind, layout, semantic identity, and output bytes. Incorporated Runs must still match SQLite; ambiguous, changed, or unproven data is retained.

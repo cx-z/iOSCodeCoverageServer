@@ -17,9 +17,12 @@ No HTTP parsing, Run upload, schema migration, Token handling, Git checkout/work
 - `mapping/source_region.py`: exact Git line/range inheritance evidence.
 - `orchestrator.py`: `CycleAnalysisOrchestrator` snapshot selection and stage coordination.
 - `scheduler.py`: single worker; `command_runner.py`: argv-only subprocess evidence.
+- `storage/retained_evidence.py`: verified same-Build merged-profile baseline used after raw profile compaction.
 
 ## Dependency direction and data
 
 The orchestrator calls the three analyzers; analyzers share mapping/parser utilities and fixed integration boundaries. They read SQLite snapshots and immutable files and publish only under root runtime `analysis/`. No analyzer reads mutable working-tree source.
+
+After cleanup, `SingleBuildAnalyzer` treats incorporated Runs as one Cycle/Build-scoped validated baseline and merges it only with new profiles from that same Build. The input-set identity still contains every Run identity; the cumulative analyzer continues to consume one independent export per Build. Input orchestration resolves that retained baseline once per Build, avoiding repeated hashes of large immutable exports for each missing raw profile.
 
 Tests are under `tests/analysis/`, with scheduler integration under `tests/server/test_automatic_analysis.py`.

@@ -24,6 +24,7 @@ from ioscoverage.analysis.diff.analyzer import (
     SingleBuildDiffAnalysisError,
     SingleBuildDiffAnalyzer,
 )
+from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore
 
 
 ORCHESTRATION_SCHEMA_VERSION = 1
@@ -72,6 +73,9 @@ class CycleAnalysisOrchestrator:
         self.cycle_analyzer = cycle_analyzer or CycleCoverageAnalyzer(configuration)
         self.snapshot_observer = snapshot_observer
         self.analysis_root = configuration.analysis_root.parent / "cycle-latest"
+        self.retained_evidence_store = RetainedBuildEvidenceStore(
+            configuration.analysis_root.parent
+        )
 
     def analyze(self, cycle_id: str) -> CycleAnalysisOrchestrationResult:
         """Runs or reuses the complete immutable analysis selected from one DB snapshot."""
@@ -392,6 +396,9 @@ class CycleAnalysisOrchestrator:
                     "build_manifest_mismatch",
                     "Build manifest does not match SQLite or its SHA-256",
                 )
+            retained_baseline = self.retained_evidence_store.find_compatible(
+                cycle_id, build_id, build["manifest_sha256"], item["runs"]
+            )
             for run in item["runs"]:
                 run_dir = self.configuration.data_dir / "cycles" / cycle_id / "runs" / str(run["id"])
                 metadata = self._load_json_file(run_dir / "metadata.json", "run_metadata_invalid")
@@ -407,7 +414,14 @@ class CycleAnalysisOrchestrator:
                         "run_metadata_mismatch",
                         "Run metadata does not match SQLite or its SHA-256",
                     )
-                size, sha = self._file_identity(run_dir / "payload.profraw", "Run profraw")
+                payload_path = run_dir / "payload.profraw"
+                if (
+                    not payload_path.is_file()
+                    and retained_baseline is not None
+                    and self.retained_evidence_store.run_matches(retained_baseline, run)
+                ):
+                    continue
+                size, sha = self._file_identity(payload_path, "Run profraw")
                 if size != run["payload_size"] or sha != run["payload_sha256"]:
                     raise CycleAnalysisOrchestrationError(
                         "run_validation",

@@ -24,6 +24,11 @@ from ioscoverage.storage.coverage_store import ARTIFACT_STORAGE_NAMES
 from ioscoverage.integrations.git_repository import GitRepository, GitRepositoryError
 from ioscoverage.projects import ProjectRegistry, ProjectRegistryError
 from ioscoverage.runtime import RuntimePaths
+from ioscoverage.storage.retained_evidence import (
+    RetainedBuildEvidence,
+    RetainedBuildEvidenceStore,
+    RetainedEvidenceError,
+)
 
 
 ANALYSIS_SCHEMA_VERSION = 1
@@ -107,6 +112,7 @@ class SingleBuildAnalyzer:
         repository: Optional[object] = None,
         command_runner_factory: Callable[[Path, Path], object] = EvidenceCommandRunner,
         artifact_validator_factory: Optional[Callable[[Path, Callable], object]] = None,
+        retained_evidence_store: Optional[RetainedBuildEvidenceStore] = None,
     ):
         """Injects controllable process dependencies while retaining fixed production paths."""
 
@@ -114,6 +120,9 @@ class SingleBuildAnalyzer:
         self.repository_override = repository
         self.command_runner_factory = command_runner_factory
         self.artifact_validator_factory = artifact_validator_factory or self._artifact_validator
+        self.retained_evidence_store = retained_evidence_store or RetainedBuildEvidenceStore(
+            configuration.analysis_root.parent
+        )
 
     def analyze(
         self, cycle_id: str, build_id: str, run_ids: Sequence[str]
@@ -134,24 +143,27 @@ class SingleBuildAnalyzer:
         runner = self.command_runner_factory(staging_dir, self.configuration.developer_dir)
         input_set_sha256: Optional[str] = None
         try:
-            build, manifest, artifact_paths, runs = self._load_and_validate_inputs(
+            build, manifest, artifact_paths, runs, baseline = self._load_and_validate_inputs(
                 cycle_id, build_id, normalized_run_ids
             )
             self._validate_git(build)
-            validator = self.artifact_validator_factory(
-                self.configuration.developer_dir, runner.run_for_artifact_validator
-            )
-            try:
-                actual_uuids = validator.validate(
-                    artifact_paths,
-                    manifest["macho_uuids"],
-                    str(build["coverage_binary"]),
-                    staging_dir,
-                    MAX_DSYM_UNCOMPRESSED_BYTES,
+            if baseline is None:
+                validator = self.artifact_validator_factory(
+                    self.configuration.developer_dir, runner.run_for_artifact_validator
                 )
-            except ArtifactValidationError as error:
-                exit_code = 4 if error.code.startswith(("artifact_tool", "xcode_toolchain")) else 3
-                raise SingleBuildAnalysisError(error.code, error.message, exit_code) from error
+                try:
+                    actual_uuids = validator.validate(
+                        artifact_paths,
+                        manifest["macho_uuids"],
+                        str(build["coverage_binary"]),
+                        staging_dir,
+                        MAX_DSYM_UNCOMPRESSED_BYTES,
+                    )
+                except ArtifactValidationError as error:
+                    exit_code = 4 if error.code.startswith(("artifact_tool", "xcode_toolchain")) else 3
+                    raise SingleBuildAnalysisError(error.code, error.message, exit_code) from error
+            else:
+                actual_uuids = baseline.actual_macho_uuids
 
             inputs = self._build_inputs_document(build, manifest, runs, actual_uuids)
             input_set_sha256 = self._input_set_sha256(inputs)
@@ -167,9 +179,9 @@ class SingleBuildAnalyzer:
             self._write_json(staging_dir / "inputs.json", inputs)
             tool_versions = self._collect_tool_versions(runner)
             self._write_json(staging_dir / "tool_versions.json", tool_versions)
-            self._show_each_profile(runner, runs)
+            self._show_each_profile(runner, runs, baseline)
             merged_path = staging_dir / "merged.profdata"
-            self._merge_profiles(runner, runs, merged_path)
+            self._merge_profiles(runner, runs, merged_path, baseline)
             self._show_merged_profile(runner, merged_path)
             export_path = staging_dir / "llvm-cov-export.json"
             self._export_coverage(
@@ -225,7 +237,10 @@ class SingleBuildAnalyzer:
 
     def _load_and_validate_inputs(
         self, cycle_id: str, build_id: str, run_ids: Sequence[str]
-    ) -> Tuple[Dict[str, object], Dict[str, object], Dict[str, Path], List[Dict[str, object]]]:
+    ) -> Tuple[
+        Dict[str, object], Dict[str, object], Dict[str, Path], List[Dict[str, object]],
+        Optional[RetainedBuildEvidence],
+    ]:
         """Loads SQLite read-only and validates every immutable input byte."""
 
         connection = self._readonly_database()
@@ -250,22 +265,30 @@ class SingleBuildAnalyzer:
                 raise SingleBuildAnalysisError(
                     "build_not_ready", "Build artifact_state must be ready"
                 )
-            manifest = self._validate_build_files(build, cycle_id, build_id)
-            artifact_paths = self._artifact_paths(manifest, cycle_id, build_id)
             runs: List[Dict[str, object]] = []
             for run_id in run_ids:
                 row = connection.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
                 if row is None:
                     raise SingleBuildAnalysisError("run_not_found", "run_id is not stored: " + run_id)
                 run = dict(row)
-                self._validate_run(run, cycle_id, build_id)
                 runs.append(run)
-            return build, manifest, artifact_paths, runs
+            try:
+                baseline = self.retained_evidence_store.find_compatible(
+                    cycle_id, build_id, build.get("manifest_sha256"), runs
+                )
+            except RetainedEvidenceError as error:
+                raise SingleBuildAnalysisError(error.code, error.message) from error
+            manifest = self._validate_build_files(build, cycle_id, build_id, baseline)
+            artifact_paths = self._artifact_paths(manifest, cycle_id, build_id)
+            for run in runs:
+                self._validate_run(run, cycle_id, build_id, baseline)
+            return build, manifest, artifact_paths, runs, baseline
         finally:
             connection.close()
 
     def _validate_build_files(
-        self, build: Mapping[str, object], cycle_id: str, build_id: str
+        self, build: Mapping[str, object], cycle_id: str, build_id: str,
+        baseline: Optional[RetainedBuildEvidence] = None,
     ) -> Dict[str, object]:
         """Proves manifest, SQLite descriptors, and all stored artifacts agree."""
 
@@ -342,16 +365,6 @@ class SingleBuildAnalyzer:
                 raise SingleBuildAnalysisError(
                     "artifact_database_mismatch", field_name + " descriptor differs from SQLite"
                 )
-            path = artifact_paths[field_name]
-            actual_size, actual_sha = self._file_identity(path, field_name + " artifact")
-            if actual_size != expected_size:
-                raise SingleBuildAnalysisError(
-                    "artifact_size_mismatch", field_name + " size differs from its manifest"
-                )
-            if actual_sha != expected_sha:
-                raise SingleBuildAnalysisError(
-                    "artifact_sha256_mismatch", field_name + " SHA-256 differs from its manifest"
-                )
             uuid_column = field_name + "_uuids_json"
             try:
                 database_uuids = json.loads(str(build[uuid_column]))
@@ -363,10 +376,23 @@ class SingleBuildAnalyzer:
                 raise SingleBuildAnalysisError(
                     "artifact_uuid_mismatch", field_name + " UUIDs differ from SQLite"
                 )
+            path = artifact_paths[field_name]
+            if not path.is_file() and baseline is not None and field_name in baseline.removed_artifacts:
+                continue
+            actual_size, actual_sha = self._file_identity(path, field_name + " artifact")
+            if actual_size != expected_size:
+                raise SingleBuildAnalysisError(
+                    "artifact_size_mismatch", field_name + " size differs from its manifest"
+                )
+            if actual_sha != expected_sha:
+                raise SingleBuildAnalysisError(
+                    "artifact_sha256_mismatch", field_name + " SHA-256 differs from its manifest"
+                )
         return database_manifest
 
     def _validate_run(
-        self, run: Dict[str, object], cycle_id: str, build_id: str
+        self, run: Dict[str, object], cycle_id: str, build_id: str,
+        baseline: Optional[RetainedBuildEvidence] = None,
     ) -> None:
         """Proves one Run identity, state, metadata, size, and profile hash."""
 
@@ -416,6 +442,20 @@ class SingleBuildAnalyzer:
             raise SingleBuildAnalysisError(
                 "run_metadata_sha256_mismatch", "Run metadata SHA-256 differs from SQLite: " + run_id
             )
+        if baseline is not None and self.retained_evidence_store.run_matches(baseline, run):
+            try:
+                uploaded_sha = upload_sha_path.read_text(encoding="ascii").strip()
+            except OSError as error:
+                raise SingleBuildAnalysisError(
+                    "run_sha_file_missing", "Run upload.sha256 is missing: " + run_id
+                ) from error
+            if uploaded_sha != run["payload_sha256"]:
+                raise SingleBuildAnalysisError(
+                    "run_sha_file_mismatch", "Run upload.sha256 differs from SQLite: " + run_id
+                )
+            run["profile_path"] = None
+            run["retained_in_input_set_sha256"] = baseline.input_set_sha256
+            return
         actual_size, actual_sha = self._file_identity(profile_path, "Run profraw")
         if actual_size != run["payload_size"]:
             raise SingleBuildAnalysisError(
@@ -471,10 +511,19 @@ class SingleBuildAnalyzer:
             "llvm_cov": cov.stdout.strip(),
         }
 
-    def _show_each_profile(self, runner: object, runs: Sequence[Mapping[str, object]]) -> None:
+    def _show_each_profile(
+        self, runner: object, runs: Sequence[Mapping[str, object]],
+        baseline: Optional[RetainedBuildEvidence] = None,
+    ) -> None:
         """Requires every raw profile to be independently readable before merge."""
 
-        for index, run in enumerate(runs, start=1):
+        if baseline is not None:
+            self._run_required(
+                runner, "llvm-profdata-show-retained-baseline",
+                ["xcrun", "llvm-profdata", "show", "--binary-ids", str(baseline.merged_profdata)],
+            )
+        raw_runs = [run for run in runs if run.get("profile_path") is not None]
+        for index, run in enumerate(raw_runs, start=1):
             self._run_required(
                 runner,
                 "llvm-profdata-show-run-{:02d}".format(index),
@@ -482,7 +531,8 @@ class SingleBuildAnalyzer:
             )
 
     def _merge_profiles(
-        self, runner: object, runs: Sequence[Mapping[str, object]], merged_path: Path
+        self, runner: object, runs: Sequence[Mapping[str, object]], merged_path: Path,
+        baseline: Optional[RetainedBuildEvidence] = None,
     ) -> None:
         """Merges only the explicitly selected same-Build profiles."""
 
@@ -494,7 +544,9 @@ class SingleBuildAnalyzer:
             "-o",
             str(merged_path),
         ]
-        arguments.extend(str(run["profile_path"]) for run in runs)
+        if baseline is not None:
+            arguments.append(str(baseline.merged_profdata))
+        arguments.extend(str(run["profile_path"]) for run in runs if run.get("profile_path") is not None)
         self._run_required(runner, "llvm-profdata-merge", arguments)
         if not merged_path.is_file() or merged_path.stat().st_size <= 0:
             raise SingleBuildAnalysisError(

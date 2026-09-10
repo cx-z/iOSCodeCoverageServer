@@ -14,6 +14,7 @@ from ioscoverage.storage.database import DatabaseMixin
 from ioscoverage.storage.runs import RunStoreMixin
 from ioscoverage.storage.schema import SchemaMixin
 from ioscoverage.storage.validation import ValidationMixin
+from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore
 
 
 class CoverageStore(
@@ -32,6 +33,7 @@ class CoverageStore(
         data_dir: Path,
         project_registry: ProjectRegistry,
         artifact_validator: XcodeArtifactValidator,
+        retained_evidence_store: RetainedBuildEvidenceStore = None,
     ):
         """Initializes schema and the process-local mutation lock for one store."""
 
@@ -39,6 +41,7 @@ class CoverageStore(
         self.data_dir = data_dir.resolve()
         self.project_registry = project_registry
         self.artifact_validator = artifact_validator
+        self.retained_evidence_store = retained_evidence_store
         self._mutation_lock = threading.RLock()
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_schema()

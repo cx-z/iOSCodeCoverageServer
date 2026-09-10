@@ -42,15 +42,24 @@ Install the optional Chrome extension to view line-level coverage directly on Gi
 - Repository: [IOSCoverageGitLabExtension](https://github.com/cx-z/IOSCoverageGitLabExtension)
 - Download: [v0.2.1 Release](https://github.com/cx-z/IOSCoverageGitLabExtension/releases/tag/v0.2.1)
 
-## Diagnostic CLI
+## Diagnostic and maintenance CLI
 
-All four compatibility entry points require an explicit `--runtime-root` and accept only immutable identities such as Cycle, Build, and Run IDs. They do not accept repository or artifact paths:
+The four analysis compatibility entry points require an explicit `--runtime-root` and accept only immutable identities such as Cycle, Build, and Run IDs. They do not accept repository or artifact paths:
 
 ```bash
 python3 analyze_cycle_latest.py --runtime-root /absolute/runtime --cycle-id <cycle-id>
 ```
 
 When the server is running, a Run upload asynchronously triggers the same orchestrator; the CLI does not need to be invoked manually.
+
+Runtime cleanup uses the `runtime_root` already configured in `config/server.json` and is a dry-run unless `--apply` is explicitly supplied. Formal cleanup requires the server to be stopped:
+
+```bash
+python3 cleanup_runtime_data.py
+python3 cleanup_runtime_data.py --apply
+```
+
+See [docs/runtime_data_lifecycle.md](docs/runtime_data_lifecycle.md) for retained evidence, deletion rules, and safety boundaries.
 
 ## Development Verification
 

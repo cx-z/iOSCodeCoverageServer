@@ -193,10 +193,17 @@ class RunStoreMixin:
         """Prevents an idempotent response from hiding missing immutable Run files."""
 
         base = self._run_directory(cycle_id, run_id)
-        if not all(
-            path.is_file()
-            for path in (base / "metadata.json", base / "payload.profraw", base / "upload.sha256")
-        ):
+        metadata_path = base / "metadata.json"
+        upload_path = base / "upload.sha256"
+        payload_path = base / "payload.profraw"
+        if metadata_path.is_file() and upload_path.is_file() and not payload_path.is_file():
+            row = self._find_run(run_id)
+            evidence_store = getattr(self, "retained_evidence_store", None)
+            if row is not None and evidence_store is not None and evidence_store.run_is_retained(
+                cycle_id, str(row["build_id"]), dict(row)
+            ):
+                return
+        if not all(path.is_file() for path in (metadata_path, payload_path, upload_path)):
             raise CoverageStoreError("stored_file_missing", "stored Run payload is missing")
     def _find_run(self, run_id: str) -> Optional[sqlite3.Row]:
         """Reads Run metadata without converting JSON columns."""

@@ -14,6 +14,7 @@ The server receives immutable iOS Build artifacts and user-triggered `.profraw` 
 - **Run**: one immutable `.profraw` snapshot tied to its original Cycle and Build.
 - **current Build**: the latest ready Build whose `git_sha` equals the Cycle `head_sha`.
 - **analysis generation**: durable scheduling state. New analyzable input requests a newer generation; the last successful report remains available on failure.
+- **retained Build evidence**: completion-protected binding from incorporated Runs and validated artifacts to one same-Build merged profile and LLVM export, allowing safe raw-input compaction.
 
 ## Data flow
 
@@ -48,6 +49,7 @@ See [architecture](architecture.md) for allowed dependencies and [invariants](in
 - Start/diagnose service: configure `config/server.json`, then run `./start_coverage_server.sh`; use `python3 server.py --help` for options
 - Cycle list and report: `/cycles/`
 - Diagnostic analysis only: the four root `analyze_*.py` compatibility commands
+- Runtime cleanup: `python3 cleanup_runtime_data.py` (dry-run), then stop the server before `--apply`
 - User workflow: `docs/daily_workflow.md`
 - HTTP contract: `docs/api.md`
 
@@ -61,5 +63,6 @@ See [architecture](architecture.md) for allowed dependencies and [invariants](in
 | LLVM, diff, cumulative mapping or orchestration | `modules/analysis.md`, `workflows/automatic_analysis.md` |
 | Git, GitLab or Xcode validation | `modules/integrations.md` and the calling workflow |
 | CLI or startup script | `modules/tools.md` |
+| Runtime growth, retained evidence, or cleanup | `modules/storage.md`, `modules/analysis.md`, `workflows/runtime_cleanup.md` |
 | Public repository safety or release-candidate scan | `modules/tools.md`, `invariants.md` |
 | Unsure where a symptom belongs | `code_map.md` |

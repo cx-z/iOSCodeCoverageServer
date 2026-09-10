@@ -50,6 +50,10 @@ class RuntimePaths:
         return self.state_dir / "run_upload_token"
 
     @property
+    def server_lock(self) -> Path:
+        return self.state_dir / "server.lock"
+
+    @property
     def instance_dir(self) -> Path:
         return self.root / "instance"
 
