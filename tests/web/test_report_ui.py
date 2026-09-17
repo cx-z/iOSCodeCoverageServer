@@ -333,6 +333,8 @@ class CoverageReportStoreTests(unittest.TestCase):
 class CoverageReportHTTPTests(unittest.TestCase):
     """Verifies browser shell, Bearer data boundary, and route safety."""
 
+    anonymous_read = False
+
     def setUp(self):
         """Starts a temporary local HTTP server around one report."""
 
@@ -343,6 +345,7 @@ class CoverageReportHTTPTests(unittest.TestCase):
         logger.propagate = False
         config = ProbeConfig(
             token=self.token,
+            anonymous_read=self.anonymous_read,
             data_dir=self.fixture.root / "data",
             max_file_bytes=1024,
             max_run_bytes=1024,
@@ -430,6 +433,33 @@ class CoverageReportHTTPTests(unittest.TestCase):
         result = (response.status, response.getheaders(), body)
         connection.close()
         return result
+
+
+class CoverageReportAnonymousReadHTTPTests(CoverageReportHTTPTests):
+    """Verifies anonymous read-only report access when the flag is enabled."""
+
+    anonymous_read = True
+
+    def test_report_json_requires_token_and_returns_safe_file_ids(self):
+        """Serves report JSON without any credential while keeping safe file IDs."""
+
+        path = "/api/v1/cycles/{}/report".format(self.fixture.cycle_id)
+        status, _, body = self._request("GET", path)
+        self.assertEqual(status, 200)
+        payload = json.loads(body)
+        self.assertEqual(payload["summary"]["uncovered"], 1)
+        self.assertRegex(payload["files"][0]["file_id"], r"^[0-9a-f]{64}$")
+        self.assertNotIn(str(self.fixture.root), body.decode())
+
+    def test_file_endpoint_allows_anonymous_read(self):
+        """Returns changed lines by opaque file ID without a credential."""
+
+        report = self.fixture.store.get_report(self.fixture.cycle_id)
+        file_id = report["files"][0]["file_id"]
+        prefix = "/api/v1/cycles/{}/report/files/".format(self.fixture.cycle_id)
+        status, _, body = self._request("GET", prefix + file_id)
+        self.assertEqual(status, 200)
+        self.assertEqual(len(json.loads(body)["lines"]), 5)
 
 
 class CoverageReportWebTests(unittest.TestCase):

@@ -41,6 +41,7 @@ class ProbeConfig:
     analysis_scheduler: Optional[AnalysisScheduler]
     runtime_cleanup_manager: Optional[RuntimeCleanupManager] = None
     run_upload_token: Optional[str] = None
+    anonymous_read: bool = False
     gitlab_mr_client: Optional[GitLabMRClient] = None
     report_store: Optional[CoverageReportStore] = None
     merge_request_coverage_resolver: Optional[MergeRequestCoverageResolver] = None

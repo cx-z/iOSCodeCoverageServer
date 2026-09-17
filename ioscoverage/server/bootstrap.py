@@ -50,6 +50,7 @@ def create_server(
     analysis_orchestrator_factory: Optional[Callable[[], object]] = None,
     start_analysis_scheduler: bool = True,
     run_upload_token: Optional[str] = None,
+    anonymous_read: bool = False,
     gitlab_mr_client: Optional[GitLabMRClient] = None,
     runtime_process_lock: Optional[RuntimeProcessLock] = None,
     enable_runtime_cleanup: bool = False,
@@ -124,6 +125,7 @@ def create_server(
         analysis_scheduler=scheduler,
         runtime_cleanup_manager=cleanup_manager,
         run_upload_token=run_upload_token,
+        anonymous_read=anonymous_read,
         gitlab_mr_client=gitlab_mr_client,
         report_store=report_store,
         merge_request_coverage_resolver=merge_request_coverage_resolver,
@@ -159,7 +161,8 @@ def main() -> None:
     if not 1 <= arguments.max_file_mib <= 100 or not 1 <= arguments.max_run_mib <= 4096 or not 1 <= arguments.max_build_artifact_mib <= 4096:
         raise SystemExit("upload size limits are invalid")
     try:
-        paths = ServerDeploymentConfiguration.load().runtime_paths
+        deployment = ServerDeploymentConfiguration.load()
+        paths = deployment.runtime_paths
         paths.prepare_directories()
         registry = ProjectRegistry.load(paths.projects_file)
     except (ServerDeploymentConfigurationError, RuntimeConfigurationError, ProjectRegistryError) as error:
@@ -185,6 +188,7 @@ def main() -> None:
             arguments.max_build_artifact_mib * 1024 * 1024,
             run_upload_token=run_token, gitlab_mr_client=gitlab_client,
             runtime_process_lock=runtime_lock, enable_runtime_cleanup=True,
+            anonymous_read=deployment.anonymous_read,
         )
     except (ArtifactValidationError, AnalysisStateStoreError, ProjectRegistryError, RuntimeLockError) as error:
         runtime_lock.release()
@@ -194,9 +198,13 @@ def main() -> None:
               max_probe_bytes=server.config.max_file_bytes,
               max_run_bytes=server.config.max_run_bytes,
               max_build_artifact_bytes=server.config.max_build_artifact_bytes,
+              anonymous_read=server.config.anonymous_read,
               instance_id=server.config.instance_id)
     print("iOS coverage platform server started", flush=True)
     print("Listen: http://{}:{}".format(arguments.host, server.server_port), flush=True)
+    print("Anonymous read access (MR coverage): {}".format(
+        "enabled" if server.config.anonymous_read else "disabled (operator Token required)"),
+        flush=True)
     print("Runtime root: {}".format(paths.root), flush=True)
     print("Operator token file: {}".format(paths.operator_token), flush=True)
     print("Run upload token file: {}".format(paths.run_upload_token), flush=True)

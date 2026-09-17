@@ -1,4 +1,5 @@
 {
   "schema_version": 1,
-  "runtime_root": ""
+  "runtime_root": "",
+  "anonymous_read": false
 }

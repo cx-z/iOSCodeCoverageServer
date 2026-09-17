@@ -58,6 +58,17 @@ class AuthenticationMixin:
         """Retains the operator-token predicate used by existing component boundaries."""
 
         return self._credential_scope() == "operator"
+    def _authorize_read(self) -> bool:
+        """Allows read-only endpoints without a credential when anonymous_read is enabled.
+
+        The read-only routes never create, modify, or delete data; the trusted-intranet
+        boundary is owned by the listen address and network policy. When the flag is
+        disabled, the operator Token requirement is preserved.
+        """
+
+        if self.config.anonymous_read:
+            return True
+        return self._require_token()
     def _credential_scope(self) -> Optional[str]:
         """Classifies one Bearer credential without recording its secret value."""
 

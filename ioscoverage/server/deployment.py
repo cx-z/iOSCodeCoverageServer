@@ -20,6 +20,7 @@ class ServerDeploymentConfiguration:
     """Contains the single external runtime root selected by the developer."""
 
     runtime_paths: RuntimePaths
+    anonymous_read: bool = False
 
     @classmethod
     def load(cls, path: Path = DEFAULT_SERVER_CONFIG_PATH) -> "ServerDeploymentConfiguration":
@@ -37,13 +38,22 @@ class ServerDeploymentConfiguration:
             raise ServerDeploymentConfigurationError(
                 "config/server.json must be valid UTF-8 JSON"
             ) from error
-        return cls(runtime_paths=cls._parse_runtime_paths(payload))
+        return cls(
+            runtime_paths=cls._parse_runtime_paths(payload),
+            anonymous_read=cls._parse_anonymous_read(payload),
+        )
 
     @staticmethod
     def _parse_runtime_paths(payload: object) -> RuntimePaths:
-        """Accepts only schema_version and one non-empty absolute runtime_root."""
+        """Accepts only schema_version, one absolute runtime_root, and optional anonymous_read."""
 
-        if not isinstance(payload, Mapping) or set(payload) != {"schema_version", "runtime_root"}:
+        if not isinstance(payload, Mapping) or not set(payload).issubset(
+            {"schema_version", "runtime_root", "anonymous_read"}
+        ):
+            raise ServerDeploymentConfigurationError(
+                "config/server.json has unknown or missing fields"
+            )
+        if "schema_version" not in payload or "runtime_root" not in payload:
             raise ServerDeploymentConfigurationError(
                 "config/server.json has unknown or missing fields"
             )
@@ -65,3 +75,14 @@ class ServerDeploymentConfiguration:
             return RuntimePaths.from_root(candidate)
         except RuntimeConfigurationError as error:
             raise ServerDeploymentConfigurationError(str(error)) from error
+
+    @staticmethod
+    def _parse_anonymous_read(payload: Mapping[str, object]) -> bool:
+        """Reads the optional read-only access flag; defaults to token-protected."""
+
+        value = payload.get("anonymous_read", False)
+        if not isinstance(value, bool):
+            raise ServerDeploymentConfigurationError(
+                "anonymous_read in config/server.json must be a boolean"
+            )
+        return value

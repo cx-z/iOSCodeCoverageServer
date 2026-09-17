@@ -437,6 +437,8 @@ class ResolverReadOnlyStorageTests(unittest.TestCase):
 class GitLabCoverageResolverHTTPTests(unittest.TestCase):
     """Verifies strict JSON and operator-only authentication on the new route."""
 
+    anonymous_read = False
+
     def setUp(self):
         """Starts one isolated route with a deterministic resolver collaborator."""
 
@@ -470,6 +472,7 @@ class GitLabCoverageResolverHTTPTests(unittest.TestCase):
         config = ProbeConfig(
             token=self.operator_token,
             run_upload_token=self.run_token,
+            anonymous_read=self.anonymous_read,
             data_dir=Path(tempfile.gettempdir()) / "ios-coverage-resolver-test",
             max_file_bytes=1024,
             max_run_bytes=1024,
@@ -573,6 +576,46 @@ class GitLabCoverageResolverHTTPTests(unittest.TestCase):
         result = (response.status, response.read())
         connection.close()
         return result
+
+
+class GitLabCoverageResolverAnonymousReadHTTPTests(GitLabCoverageResolverHTTPTests):
+    """Verifies the read-only resolver is reachable without a credential when enabled."""
+
+    anonymous_read = True
+
+    def test_only_operator_token_can_resolve(self):
+        """Anonymous read allows every credential shape to reach the resolver."""
+
+        for token in (None, "wrong-token", self.run_token):
+            status, body = self._request(token)
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["status"], "cycle_not_found")
+
+    def test_anonymous_read_keeps_write_and_list_routes_token_protected(self):
+        """Cycle creation and the cycles list still require the operator Token."""
+
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", self.server.server_port, timeout=3
+        )
+        connection.request(
+            "POST",
+            "/api/v1/cycles",
+            body=b"{}",
+            headers={"Content-Type": "application/json", "Content-Length": "2"},
+        )
+        response = connection.getresponse()
+        response.read()
+        connection.close()
+        self.assertEqual(response.status, 401)
+
+        connection = http.client.HTTPConnection(
+            "127.0.0.1", self.server.server_port, timeout=3
+        )
+        connection.request("GET", "/api/v1/cycles")
+        response = connection.getresponse()
+        response.read()
+        connection.close()
+        self.assertEqual(response.status, 401)
 
 
 if __name__ == "__main__":

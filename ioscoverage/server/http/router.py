@@ -92,7 +92,7 @@ class ProbeRequestHandler(
             r"/api/v1/cycles/([^/]+)/report/files/([0-9a-f]{64})", path
         )
         if report_file_match:
-            if not self._require_token():
+            if not self._authorize_read():
                 return
             self._handle_report_file_get(
                 report_file_match.group(1), report_file_match.group(2)
@@ -100,7 +100,7 @@ class ProbeRequestHandler(
             return
         report_match = re.fullmatch(r"/api/v1/cycles/([^/]+)/report", path)
         if report_match:
-            if not self._require_token():
+            if not self._authorize_read():
                 return
             self._handle_report_get(report_match.group(1))
             return
@@ -129,7 +129,7 @@ class ProbeRequestHandler(
         self._begin_request()
         path = urlsplit(self.path).path
         if path == "/api/v1/integrations/gitlab/merge-request-coverage/resolve":
-            if not self._require_token():
+            if not self._authorize_read():
                 return
             self._handle_gitlab_merge_request_coverage_resolve()
             return

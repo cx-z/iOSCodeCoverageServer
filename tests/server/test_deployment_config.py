@@ -73,6 +73,37 @@ class ServerDeploymentConfigurationTests(unittest.TestCase):
                 with self.assertRaises(ServerDeploymentConfigurationError):
                     ServerDeploymentConfiguration.load(self.config)
 
+    def test_anonymous_read_is_optional_boolean_defaulting_false(self) -> None:
+        """Accepts only booleans for the read-only flag and defaults to token-protected."""
+
+        self.write({"schema_version": 1, "runtime_root": str(self.runtime)})
+        self.assertFalse(ServerDeploymentConfiguration.load(self.config).anonymous_read)
+        for value in (True, False):
+            with self.subTest(value=value):
+                self.write({
+                    "schema_version": 1,
+                    "runtime_root": str(self.runtime),
+                    "anonymous_read": value,
+                })
+                self.assertEqual(
+                    ServerDeploymentConfiguration.load(self.config).anonymous_read, value
+                )
+
+    def test_anonymous_read_non_boolean_is_rejected(self) -> None:
+        """Rejects truthy or stringy flag values before any runtime file is opened."""
+
+        for value in ("yes", 1, None, []):
+            with self.subTest(value=value):
+                self.write({
+                    "schema_version": 1,
+                    "runtime_root": str(self.runtime),
+                    "anonymous_read": value,
+                })
+                with self.assertRaisesRegex(
+                    ServerDeploymentConfigurationError, "anonymous_read"
+                ):
+                    ServerDeploymentConfiguration.load(self.config)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,7 +2,7 @@
 
 实现定位从 [知识库入口](../knowledge/README.md) 开始；本文件继续作为 HTTP 路径、字段、状态码和错误码的事实源。
 
-协议版本：`schema_version = 1`。服务根地址为 `http://<Mac-LAN-IP>:8765`；当前局域网 IP 以启动脚本输出为准。`GET /health` 和不含数据的 HTML 外壳公开；JSON 接口按以下两类凭证鉴权：
+协议版本：`schema_version = 1`。服务根地址为 `http://<Mac-LAN-IP>:8765`；当前局域网 IP 以启动脚本输出为准。`GET /health` 和不含数据的 HTML 外壳公开；JSON 接口按以下两类凭证鉴权。当 `config/server.json` 启用 `anonymous_read: true` 时，GitLab MR 扩展使用的只读接口（§5 报告摘要/文件明细、§6 MR 覆盖率解析）在可信内网放行无 Token 访问；写接口与 `/cycles/` 管理页面不受影响。
 
 Cycle 的 `base_sha` 保留为首次提测审计字段；每个 Build 使用必填的 `git_sha`、`target_sha_at_build` 和 `merge_base_sha` 固化自己的比较快照，并用 `coverage_binary` 固化唯一分析主体。iPhone 只调用 Run 与网络探针接口；Build 大文件由 Mac 打包脚本注册。
 
@@ -15,7 +15,7 @@ Authorization: Bearer <token>
 | `<runtime_root>/state/operator_token` 操作员 Token | 所有现有管理、Build、Run、analysis 和报告接口 |
 | `<runtime_root>/state/run_upload_token` iOS Token | `POST /api/v1/probes`、`POST /api/v1/runs` |
 
-有效 iOS Token访问其他接口返回 HTTP 403 `insufficient_scope`；无效 Token返回 HTTP 401 `invalid_token`。GitLab PAT 只由服务端读取固定 MR GET，不是 Coverage HTTP 凭证。
+有效 iOS Token访问其他接口返回 HTTP 403 `insufficient_scope`；无效 Token返回 HTTP 401 `invalid_token`。GitLab PAT 只由服务端读取固定 MR GET，不是 Coverage HTTP 凭证。`anonymous_read` 只放行不创建、不修改、不删除数据的只读接口，公网或不可信网络部署应保持为 `false`。
 
 JSON 响应均为 UTF-8、`Cache-Control: no-store`。错误响应至少包含稳定的 `error` 代码和可读 `message`。客户端不应依赖 `message` 文案。
 
@@ -419,15 +419,14 @@ GET /api/v1/cycles/<cycle_id>/report
 GET /api/v1/cycles/<cycle_id>/report/files/<file_id>
 ```
 
-二者同样要求 Bearer Token。`file_id` 是服务端签发的仓库相对路径 SHA-256，不接受路径、Git SHA、Build、Run、命令或输出目录。HTML 入口 `GET /cycles/<cycle_id>` 不携带报告数据，页面取得 Token 后才调用上述接口。完整字段和安全边界见 [本地覆盖率报告页](coverage_report_ui.md)。
+默认要求 Bearer Token；`anonymous_read: true` 时在可信内网放行无 Token 访问。`file_id` 是服务端签发的仓库相对路径 SHA-256，不接受路径、Git SHA、Build、Run、命令或输出目录。HTML 入口 `GET /cycles/<cycle_id>` 不携带报告数据，页面取得 Token 后才调用上述接口。完整字段和安全边界见 [本地覆盖率报告页](coverage_report_ui.md)。
 
 ## 6. GitLab MR Coverage 只读解析
 
-浏览器扩展可用操作员 Token 将一个已注册项目的 MR 页面 URL 解析为当前 GitLab diff 与 latest success 报告之间的可信关系：
+浏览器扩展将一个已注册项目的 MR 页面 URL 解析为当前 GitLab diff 与 latest success 报告之间的可信关系。该接口只读：默认要求操作员 Token；`anonymous_read: true` 时在可信内网放行无 Token 访问（GitLab MR 扩展零配置场景）：
 
 ```text
 POST /api/v1/integrations/gitlab/merge-request-coverage/resolve
-Authorization: Bearer <operator-token>
 Content-Type: application/json
 ```
 
@@ -440,7 +439,7 @@ Content-Type: application/json
 }
 ```
 
-`schema_version` 必须是整数 `1`。MR URL 接受已注册 GitLab 项目的详情、`/diffs`、`/commits` 页面，并兼容带 `/-/` 和不带 `/-/` 的路由；query 与 fragment 被忽略。请求不能指定 GitLab API URL、header、Token、仓库、Build、Run、Git SHA、命令或输出路径。iOS Run Token 返回 HTTP 403 `insufficient_scope`。
+`schema_version` 必须是整数 `1`。MR URL 接受已注册 GitLab 项目的详情、`/diffs`、`/commits` 页面，并兼容带 `/-/` 和不带 `/-/` 的路由；query 与 fragment 被忽略。请求不能指定 GitLab API URL、header、Token、仓库、Build、Run、Git SHA、命令或输出路径。`anonymous_read` 关闭时 iOS Run Token 返回 HTTP 403 `insufficient_scope`；开启时该接口无需任何凭证。
 
 成功解析请求始终返回 HTTP 200 和固定顶层字段：
 
