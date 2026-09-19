@@ -24,7 +24,7 @@ SQLite 不保存 profraw、profdata、LLVM export、逐行 coverage 或命令输
 3. 全局 worker 每次只 claim 一个 Cycle 的最新 generation，并在锁外执行分析。
 4. 完成时使用 `status=running AND running_generation=<generation>` 条件提交，旧任务不能覆盖新 generation。
 5. 如果 requested generation 已前进，当前任务完成后回到 queued，只再分析一次最新一致快照。
-6. 同一输入的 retry 仍计一次 attempt，但编排器会在完整性复核后幂等复用不可变结果。
+6. 同一输入的 retry 仍计一次 attempt，但编排器会在完整性复核后幂等复用同一分析版本的不可变结果。分析版本升级后，编排器使用新 identity 重新执行下游阶段，不直接复用旧版完整 Cycle 报告。
 
 调度器不在 Condition 锁内执行 SQLite、LLVM、Git、文件 I/O 或外部回调。SQLite connection 不跨线程共享。不同 Cycle 也由同一个 worker 串行分析。
 
@@ -96,6 +96,8 @@ curl --fail-with-body -X POST \
 ## 失败、重启与关闭
 
 - 确定性或未知分析失败只执行一次并进入 failed；不修改 Run，不清除 latest success。
+- LLVM 导出含代码区域但整包未能映射到登记项目的固定 Git 源码时，失败码为 `coverage_path_mapping_failed`，不会发布“全部 not_measurable”报告。跨机器路径只有在仓库相对路径唯一、编译根一致、固定 Git 源码区域坐标可核对时才映射；歧义或不匹配分别报告安全错误码。错误响应不返回编译机绝对路径。脚本、配置等确无编译器代码区域的文件仍可为 `not_measurable`。
+- 跨机器映射以受信任的打包流程为前提：打包凭证持有者应使用 `coveragectl` 对目标项目的干净工作树执行 prepare、Archive 和 register，并保持固定 Git SHA。服务端校验登记项目中的提交与产物身份；现有 LLVM 导出不含源码内容摘要，区域坐标校验不能独立证明 Archive 的源码字节与 Git blob 完全相同。若打包产物可能来自其他源码树，应先纠正打包流程，不能将路径映射结果当作源码内容证明。
 - 新有效 Run 或人工 retry 可以从 failed 请求新 generation。
 - 服务启动把遗留 running 恢复为 queued、清除 running generation 并增加 recovery count；恢复本身不增加 generation，也不循环重试。
 - 生产环境中的每次 Cycle 编排都在独立进程组内运行，LLVM/Git 子进程属于同一组。即使 Python analysis leader 先异常退出，也会先清理并确认整个进程组为空，再允许 scheduler 进入 idle。若无法确认终止，持久 generation 和 scheduler 都保持 running，阻止后续分析和在线清理；只有进程组被证明消失后，才允许持久化失败并解除运行所有权，因此失败写入在提交后的异常也不能提前打开清理屏障。analysis worker 及受控 Git/LLVM/Xcode 子进程继承同一 `server.lock` lease；父服务被 SIGKILL 或崩溃时，只要分析执行仍存活，新服务和离线清理就不能取得运行目录。SIGTERM 会进入正常协调关停，取消尚在等待 analysis/mutation barrier 的清理、拒绝新调度，并在有界宽限期内先终止活动分析进程组再 join worker；只有确认分析不再访问 runtime 后才释放 `server.lock`。被取消的 running generation 由下次启动恢复为 queued。已进入安全隔离/删除阶段的清理仍会先完整结束。

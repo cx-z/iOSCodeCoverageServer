@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>iOS Coverage 用户管理</title>
+  <style>
+__INLINE_CSS__
+  </style>
+</head>
+<body>
+  <header><div class="page"><h1>平台账号管理</h1><div class="muted"><a href="/cycles/">返回 Cycle 列表</a></div></div></header>
+  <main class="page">
+    <section id="access-error" class="panel error" hidden></section>
+    <section id="content" hidden>
+      <section class="panel">
+        <h2>创建账号</h2>
+        <form id="create-user" class="row"><input id="username" required autocomplete="off" placeholder="用户名"><input id="password" type="password" required autocomplete="new-password" placeholder="初始密码"><select id="role"><option value="developer">developer</option><option value="admin">admin</option></select><button type="submit">创建</button></form>
+        <div id="create-status" class="status-message"></div>
+      </section>
+      <section class="panel">
+        <div class="row"><h2>用户列表</h2><button id="refresh" class="secondary" type="button">刷新</button></div>
+        <div class="table-wrap"><table><thead><tr><th>用户名</th><th>角色</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="user-rows"></tbody></table></div>
+      </section>
+    </section>
+  </main>
+  <script>
+__INLINE_SCRIPT__
+  </script>
+</body>
+</html>

@@ -18,6 +18,7 @@ from ioscoverage.analysis.mapping.coverage_export import (
     CoverageExportError,
     CoverageRegion,
     NormalizedCoverage,
+    fixed_git_sources,
     normalize_coverage_export,
     regions_for_source_line,
 )
@@ -42,7 +43,7 @@ from ioscoverage.analysis.mapping.source_region import (
 
 
 CYCLE_COVERAGE_SCHEMA_VERSION = 1
-CYCLE_ANALYZER_VERSION = "cycle-coverage/1"
+CYCLE_ANALYZER_VERSION = "cycle-coverage/2"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -113,7 +114,7 @@ class CycleCoverageAnalyzer:
         runner = self.command_runner_factory(staging_dir, self.configuration.developer_dir)
         cycle_input_sha: Optional[str] = None
         try:
-            inputs = self._load_build_inputs(cycle_id, normalized_inputs)
+            inputs = self._load_build_inputs(cycle_id, normalized_inputs, runner)
             current = next(item for item in inputs if item.build["id"] == current_build_id)
             projects = {str(item.build["project"]) for item in inputs}
             if len(projects) != 1:
@@ -250,12 +251,12 @@ class CycleCoverageAnalyzer:
             raise wrapped from error
 
     def _load_build_inputs(
-        self, cycle_id: str, build_inputs: Mapping[str, str]
+        self, cycle_id: str, build_inputs: Mapping[str, str], runner: object
     ) -> List[BuildAnalysisInput]:
         """Validates every Build and prior single-Build LLVM result without writes."""
 
         result: List[BuildAnalysisInput] = []
-        for build_id, input_sha in build_inputs.items():
+        for index, (build_id, input_sha) in enumerate(build_inputs.items(), start=1):
             build, _ = self.input_validator.load_and_validate_build(cycle_id, build_id)
             single_dir = self.configuration.analysis_root / build_id / input_sha
             _, _, export_path, export_sha = self.input_validator.validate_single_build_result(
@@ -268,7 +269,16 @@ class CycleCoverageAnalyzer:
                     "coverage_export_invalid", "llvm-cov export is missing or invalid"
                 ) from error
             repository_path = self.configuration.project_repository_path(build["project"])
-            coverage = normalize_coverage_export(payload, repository_path)
+            git_sha = str(build["git_sha"])
+            if not GIT_SHA_PATTERN.fullmatch(git_sha):
+                raise CycleCoverageAnalysisError("invalid_git_sha", "git_sha must be a full SHA")
+            git_paths, load_source = fixed_git_sources(
+                lambda label, arguments: self._run_git(runner, label, arguments),
+                repository_path, git_sha, "git-coverage-{:02d}".format(index),
+            )
+            coverage = normalize_coverage_export(
+                payload, repository_path, git_paths, load_source
+            )
             result.append(BuildAnalysisInput(build, input_sha, export_sha, coverage))
         result.sort(key=lambda item: (self._build_time(item), str(item.build["id"])))
         return result

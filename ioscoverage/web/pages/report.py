@@ -7,7 +7,7 @@ from ioscoverage.web.assets import render_document
 
 
 def render_coverage_report_page(cycle_id: str) -> bytes:
-    """Renders a data-free shell whose JSON requests still require Bearer auth."""
+    """Renders a data-free shell whose JSON requests use anonymous read or Web Session."""
 
     normalized = str(uuid.UUID(cycle_id))
     if normalized != cycle_id:

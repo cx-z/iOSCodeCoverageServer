@@ -2,7 +2,7 @@
 
 ## Purpose and scope
 
-The server keeps the latest successful report readable while compacting inputs that have already been incorporated into verified analysis evidence. Production cleanup runs inside the server at startup, every 24 hours from that process start, or after an operator request. It does not delete SQLite resource rows or relax coverage inheritance.
+The server keeps the latest successful report readable while compacting inputs that have already been incorporated into verified analysis evidence. Production cleanup runs inside the server at startup, every 24 hours from that process start, or after an admin/operator request. It does not delete SQLite resource rows or relax coverage inheritance.
 
 Restarting the server resets the in-memory 24-hour timer; no cleanup deadline or cleanup result is persisted in SQLite. Run `python3 cleanup_runtime_data.py` for an independent dry-run. Stop the server and add `--apply` only when using the offline fallback.
 
@@ -70,7 +70,7 @@ python3 cleanup_runtime_data.py --apply
 
 Both modes emit one JSON object with scanned Cycle/Build/Run/generation counts, planned and actual item/byte totals by category, skipped reasons, total planned/released bytes, and the `dry_run` flag. Repeating apply is idempotent.
 
-Online status and manual triggering require the operator Token; the restricted iOS Run Token is rejected:
+Online status and manual triggering require an admin Session or operator compatibility Token; packaging and restricted iOS Run Tokens are rejected:
 
 ```text
 GET  /api/v1/maintenance/cleanup

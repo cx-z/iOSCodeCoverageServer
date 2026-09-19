@@ -9,6 +9,7 @@ import unittest
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import ioscoverage.analysis.orchestrator as orchestrator_module
 from ioscoverage.cli.analyze_cycle_latest import build_parser
@@ -78,6 +79,7 @@ class FakeCycleAnalyzer:
         self.root = root / "cycle-coverage"
         self.calls = []
         self.failure = None
+        self.lines = {"covered": 9, "uncovered": 1, "measurable": 10}
 
     def analyze(self, cycle_id, current_build_id, build_inputs):
         """Returns a stable cumulative summary from exact Build input identities."""
@@ -92,7 +94,7 @@ class FakeCycleAnalyzer:
         summary = {
             "status": "complete",
             "cycle_input_set_sha256": identity,
-            "lines": {"covered": 9, "uncovered": 1, "measurable": 10},
+            "lines": self.lines,
         }
         publish_fake_result(
             directory, "complete.json", "cycle_input_set_sha256", identity, summary
@@ -533,6 +535,26 @@ class CycleAnalysisOrchestratorTests(unittest.TestCase):
         self.assertEqual(first.orchestration_input_sha256, second.orchestration_input_sha256)
         self.assertTrue(second.idempotent_replay)
         self.assertEqual(first.summary, second.summary)
+
+    def test_retry_recomputes_old_version_result_with_unchanged_inputs(self):
+        """An old completed Cycle cannot bypass the repaired diff and cumulative stages."""
+
+        old_orchestrator, _, _, old_cycle = self.workspace.orchestrator()
+        old_cycle.lines = {"covered": 0, "uncovered": 0, "measurable": 0,
+                           "not_measurable": 392}
+        with patch.object(orchestrator_module, "ORCHESTRATOR_VERSION", "cycle-latest/1"):
+            old = old_orchestrator.analyze(self.workspace.cycle_id)
+
+        new_orchestrator, single, diff, cycle = self.workspace.orchestrator()
+        new = new_orchestrator.analyze(self.workspace.cycle_id)
+
+        self.assertNotEqual(old.orchestration_input_sha256, new.orchestration_input_sha256)
+        self.assertFalse(new.idempotent_replay)
+        self.assertEqual(len(single.calls), 3)
+        self.assertEqual(len(diff.calls), 1)
+        self.assertEqual(len(cycle.calls), 1)
+        self.assertEqual(new.summary["cumulative_summary"]["lines"]["measurable"], 10)
+        self.assertTrue(old.output_directory.is_dir())
 
     def test_failure_staging_never_contains_complete_marker(self):
         """Publishes failure evidence only beneath .failed."""

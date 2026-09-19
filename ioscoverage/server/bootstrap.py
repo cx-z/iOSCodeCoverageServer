@@ -24,6 +24,7 @@ from ioscoverage.server.http.server import ProbeHTTPServer
 from ioscoverage.server.mr_coverage_resolver import MergeRequestCoverageResolver
 from ioscoverage.server.logging import configure_logging, write_log
 from ioscoverage.storage.analysis_state import AnalysisStateStore, AnalysisStateStoreError
+from ioscoverage.storage.accounts import AccountStore, AccountStoreError
 from ioscoverage.storage.coverage_store import CoverageStore
 from ioscoverage.storage.reports import CoverageReportStore
 from ioscoverage.storage.tokens import TokenStore
@@ -55,6 +56,7 @@ def create_server(
     runtime_process_lock: Optional[RuntimeProcessLock] = None,
     enable_runtime_cleanup: bool = False,
     cleanup_interval_seconds: float = DEFAULT_CLEANUP_INTERVAL_SECONDS,
+    packaging_token: Optional[str] = None,
 ) -> ProbeHTTPServer:
     """Creates a server whose mutable paths and projects are startup-fixed."""
 
@@ -66,6 +68,7 @@ def create_server(
         retained_evidence_store=retained_evidence_store,
     )
     analysis_state_store = AnalysisStateStore(runtime_paths.database)
+    account_store = AccountStore(runtime_paths.database)
     report_store = CoverageReportStore(runtime_paths.analysis_dir, analysis_state_store)
     cancel_active_analysis = None
     active_analysis_check = None
@@ -125,6 +128,8 @@ def create_server(
         analysis_scheduler=scheduler,
         runtime_cleanup_manager=cleanup_manager,
         run_upload_token=run_upload_token,
+        packaging_token=packaging_token,
+        account_store=account_store,
         anonymous_read=anonymous_read,
         gitlab_mr_client=gitlab_mr_client,
         report_store=report_store,
@@ -168,14 +173,20 @@ def main() -> None:
     except (ServerDeploymentConfigurationError, RuntimeConfigurationError, ProjectRegistryError) as error:
         raise SystemExit(getattr(error, "message", str(error)))
     operator_store = TokenStore(paths.operator_token)
+    packaging_store = TokenStore(paths.packaging_token)
     run_store = TokenStore(paths.run_upload_token)
     try:
         operator_token = operator_store.rotate() if arguments.rotate_operator_token else operator_store.load_or_create()
+        packaging_token = packaging_store.load_or_create()
         run_token = run_store.load_or_create()
     except ValueError as error:
         raise SystemExit(str(error))
-    if secrets.compare_digest(operator_token, run_token):
-        raise SystemExit("operator and Run upload tokens must be different")
+    tokens = (operator_token, packaging_token, run_token)
+    if any(
+        secrets.compare_digest(tokens[left], tokens[right])
+        for left, right in ((0, 1), (0, 2), (1, 2))
+    ):
+        raise SystemExit("operator, packaging, and Run upload tokens must be different")
     gitlab_client = GitLabMRClient(paths.gitlab_token, registry)
     logger = configure_logging(paths.server_log)
     runtime_lock = RuntimeProcessLock(paths.server_lock)
@@ -187,10 +198,11 @@ def main() -> None:
             arguments.max_run_mib * 1024 * 1024,
             arguments.max_build_artifact_mib * 1024 * 1024,
             run_upload_token=run_token, gitlab_mr_client=gitlab_client,
+            packaging_token=packaging_token,
             runtime_process_lock=runtime_lock, enable_runtime_cleanup=True,
             anonymous_read=deployment.anonymous_read,
         )
-    except (ArtifactValidationError, AnalysisStateStoreError, ProjectRegistryError, RuntimeLockError) as error:
+    except (ArtifactValidationError, AnalysisStateStoreError, AccountStoreError, ProjectRegistryError, RuntimeLockError) as error:
         runtime_lock.release()
         raise SystemExit(getattr(error, "message", str(error)))
     write_log(logger, "server_started", host=arguments.host, port=server.server_port,
@@ -207,6 +219,7 @@ def main() -> None:
         flush=True)
     print("Runtime root: {}".format(paths.root), flush=True)
     print("Operator token file: {}".format(paths.operator_token), flush=True)
+    print("Packaging token file: {}".format(paths.packaging_token), flush=True)
     print("Run upload token file: {}".format(paths.run_upload_token), flush=True)
     print("Projects: {}".format(", ".join(item.project for item in registry.projects)), flush=True)
     print("Stop: press Control-C", flush=True)

@@ -226,20 +226,26 @@ class UsabilityServerTests(unittest.TestCase):
         self.assertEqual(cycles[0]["build_count"], 1)
         self.assertEqual(cycles[0]["run_count"], 1)
 
-    def test_cycles_redirect_and_data_free_shell(self) -> None:
-        """Serves a static shell with the MR form and no persisted Cycle or credentials."""
+    def test_cycles_redirect_and_data_free_login_shell(self) -> None:
+        """Routes anonymous browsers to a safe login shell without Cycle data."""
 
         _, _, created_body = self.create_from_mr()
         cycle_id = json.loads(created_body)["cycle"]["id"]
         status, headers, _ = self.request("GET", "/cycles")
         self.assertEqual(status, 308)
         self.assertEqual(headers["Location"], "/cycles/")
-        status, _, body = self.request("GET", "/cycles/")
+        status, headers, _ = self.request("GET", "/cycles/")
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"], "/login/")
+        status, _, body = self.request("GET", "/login/")
         text = body.decode("utf-8")
         self.assertEqual(status, 200)
-        self.assertIn("id=\"create-form\"", text)
-        self.assertIn("/api/v1/cycles", text)
-        self.assertIn("ios-coverage-operator-token", text)
+        self.assertIn("id=\"login-form\"", text)
+        self.assertIn("id=\"register-form\" hidden", text)
+        self.assertNotIn("id=\"create-form\"", text)
+        self.assertNotIn("ios-coverage-operator-token", text)
+        self.assertNotIn("sessionStorage", text)
+        self.assertNotIn("Authorization", text)
         self.assertNotIn(cycle_id, text)
         self.assertNotIn(self.operator_token, text)
         self.assertNotIn(self.run_token, text)

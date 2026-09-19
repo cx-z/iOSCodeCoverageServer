@@ -21,7 +21,7 @@ ioscoverage/
     static/*.{css,js}
   storage/                     SQLite and immutable file persistence
     coverage_store.py          Cycle/Build/Run facade
-    {database,schema,cycles,builds,runs,artifact_files,validation}.py
+    {database,schema,accounts,cycles,builds,runs,artifact_files,validation}.py
     analysis_state.py
     reports.py
     retained_evidence.py
@@ -39,7 +39,7 @@ ioscoverage/
   lifecycle/                   runtime lock, safe cleanup, and in-process cleanup timer
 ```
 
-`server.py`, the four root analysis scripts, and `cleanup_runtime_data.py` are thin compatibility entry points. `start_coverage_server.sh` delegates to `scripts/start_coverage_server.sh`.
+`server.py`, the four root analysis scripts, `cleanup_runtime_data.py`, and `manage_users.py` are thin compatibility entry points. `start_coverage_server.sh` delegates to `scripts/start_coverage_server.sh`.
 
 ## Dependency direction
 
@@ -47,7 +47,7 @@ ioscoverage/
 - `server.http` converts requests and responses. It may call storage facades, the scheduler, fixed integration clients, and web renderers; it does not implement SQL, LLVM, or Git algorithms.
 - `server.mr_coverage_resolver` is a read-only application service that combines one registry-bounded GitLab MR, an existing Cycle, analysis state, a completion-verified report, and its immutable current Build. It never calls mutation or scheduling APIs.
 - `web` accepts already projected values and trusted internal template names. It must not depend on SQLite, TokenStore, Build artifacts, Runs, or arbitrary paths.
-- `storage.coverage_store` is the stable facade over Cycle/Build/Run mixins. HTTP code never opens SQLite directly.
+- `storage.coverage_store` is the stable facade over Cycle/Build/Run mixins; `storage.accounts.AccountStore` independently owns users and Sessions. HTTP code never opens SQLite directly.
 - `analysis` reads immutable database/file identities and fixed Git objects. The scheduler invokes the orchestrator, which reuses the single-Build, diff, and cumulative analyzers.
 - `integrations` owns subprocess/network boundaries for project-selected Git, Xcode artifacts, and registered GitLab MR GET.
 - `cli` validates command arguments and formats results; it does not duplicate analysis logic.
@@ -65,7 +65,7 @@ No lower layer imports an HTTP route. Storage does not depend on Web. Web does n
 
 The following live only below the explicit runtime root and must never be derived from source location:
 
-- `state/`: operator, restricted Run upload, and GitLab credential files;
+- `state/`: operator, packaging, restricted Run upload, GitLab credential files, and runtime lock;
 - `instance/`: SQLite database;
 - `data/`: Build artifacts, Run payloads, probe uploads, staging;
 - `analysis/`: immutable analysis results and failure evidence;

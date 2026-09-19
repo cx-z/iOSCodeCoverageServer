@@ -48,6 +48,7 @@ class ArchitectureCompatibilityTests(unittest.TestCase):
             "analyze_cycle_coverage.py",
             "analyze_cycle_latest.py",
             "cleanup_runtime_data.py",
+            "manage_users.py",
         ]
         environment = dict(os.environ)
         environment["PYTHONPYCACHEPREFIX"] = "/private/tmp/ios-coverage-tests-pycache"
@@ -134,6 +135,7 @@ class ArchitectureCompatibilityTests(unittest.TestCase):
             "analyze_cycle_coverage.py",
             "analyze_cycle_latest.py",
             "cleanup_runtime_data.py",
+            "manage_users.py",
         ):
             with self.subTest(name=name):
                 lines = (SOURCE_ROOT / name).read_text(encoding="utf-8").splitlines()

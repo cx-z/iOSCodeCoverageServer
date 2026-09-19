@@ -11,7 +11,8 @@ from typing import Dict, Iterator, List, Mapping, Optional
 
 
 ANALYSIS_STATE_SCHEMA_VERSION = 1
-DATABASE_USER_VERSION = 3
+ANALYSIS_DATABASE_USER_VERSION = 3
+MAX_DATABASE_USER_VERSION = 4
 ANALYSIS_STATUSES = ("idle", "queued", "running", "succeeded", "failed")
 ANALYSIS_TRIGGERS = (
     "run_uploaded",
@@ -268,7 +269,7 @@ class AnalysisStateStore:
 
         with self._database() as connection:
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version > DATABASE_USER_VERSION:
+            if version > MAX_DATABASE_USER_VERSION:
                 raise AnalysisStateStoreError(
                     "unsupported_database_schema", "coverage database is newer than this server"
                 )
@@ -306,7 +307,7 @@ class AnalysisStateStore:
                 ON cycle_analysis_states(status, requested_at, cycle_id);
                 """
             )
-            if version < DATABASE_USER_VERSION:
+            if version < ANALYSIS_DATABASE_USER_VERSION:
                 connection.execute("PRAGMA user_version = 3")
             connection.commit()
 

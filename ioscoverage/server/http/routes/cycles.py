@@ -32,8 +32,8 @@ from ioscoverage.web.pages.report import render_coverage_report_page
 
 
 class CycleRoutesMixin:
-    def _handle_cycle_create(self) -> None:
-        """Creates a legacy Cycle or resolves the preferred fixed-host MR URL request."""
+    def _handle_cycle_create(self, principal) -> None:
+        """Creates operator Cycles or one web user's MR submission relationship."""
 
         try:
             payload = self._read_json_body()
@@ -52,8 +52,7 @@ class CycleRoutesMixin:
                         HTTPStatus.SERVICE_UNAVAILABLE,
                     )
                 merge_request = client.fetch(payload.get("mr_url"))
-                cycle, reused = self.config.coverage_store.create_or_get_cycle(
-                    {
+                cycle_payload = {
                         "schema_version": 1,
                         "project": merge_request.project,
                         "mr_iid": str(merge_request.iid),
@@ -62,10 +61,23 @@ class CycleRoutesMixin:
                         "base_sha": merge_request.base_sha,
                         "head_sha": merge_request.head_sha,
                     }
-                )
+                if principal.kind == "web_user":
+                    cycle, reused, relationship_existed = (
+                        self.config.coverage_store.create_or_get_cycle_for_user(
+                            cycle_payload, str(principal.user_id)
+                        )
+                    )
+                else:
+                    cycle, reused = self.config.coverage_store.create_or_get_cycle(cycle_payload)
+                    relationship_existed = False
             else:
+                if principal.kind == "web_user":
+                    raise CoverageStoreError(
+                        "invalid_fields", "web users may submit only schema_version and mr_url"
+                    )
                 cycle = self.config.coverage_store.create_cycle(payload)
                 reused = False
+                relationship_existed = False
         except GitLabMRClientError as error:
             self._send_gitlab_error(error)
             return
@@ -74,23 +86,40 @@ class CycleRoutesMixin:
             return
         event = "cycle_reused" if reused else "cycle_created"
         self._log_event(event, cycle_id=cycle["id"], mr_iid=cycle.get("mr_iid"))
-        self._send_json(
-            HTTPStatus.OK if reused else HTTPStatus.CREATED,
-            {"status": "reused" if reused else "created", "cycle": cycle},
-        )
-    def _handle_cycle_list(self) -> None:
-        """Returns all persisted Cycles newest first."""
+        response = {"status": "reused" if reused else "created", "cycle": cycle}
+        if principal.kind == "web_user":
+            response["submission_status"] = (
+                "existing" if relationship_existed else "added"
+            )
+        self._send_json(HTTPStatus.OK if reused else HTTPStatus.CREATED, response)
+    def _handle_cycle_list(self, principal) -> None:
+        """Returns the principal-scoped Cycle projection newest first."""
 
         try:
-            cycles = self.config.coverage_store.list_cycles()
+            if principal.kind == "web_user" and principal.role == "developer":
+                cycles = self.config.coverage_store.list_cycles_for_user(
+                    str(principal.user_id)
+                )
+            elif principal.kind == "web_user" and principal.role == "admin":
+                cycles = self.config.coverage_store.list_cycles_with_submitters()
+            else:
+                cycles = self.config.coverage_store.list_cycles()
         except CoverageStoreError as error:
             self._send_domain_error(error)
             return
         self._send_json(HTTPStatus.OK, {"cycles": cycles, "count": len(cycles)})
-    def _handle_cycle_get(self, cycle_id: str) -> None:
-        """Returns one Cycle by its stable ID."""
+    def _handle_cycle_get(self, cycle_id: str, principal) -> None:
+        """Returns one known Cycle while preventing developer ownership bypass."""
 
         try:
+            if (
+                principal.kind == "web_user"
+                and principal.role == "developer"
+                and not self.config.coverage_store.user_submitted_cycle(
+                    str(principal.user_id), cycle_id
+                )
+            ):
+                raise CoverageStoreError("cycle_not_found", "cycle_id is not registered")
             cycle = self.config.coverage_store.get_cycle(cycle_id)
         except CoverageStoreError as error:
             self._send_domain_error(error)

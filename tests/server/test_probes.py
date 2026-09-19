@@ -145,7 +145,7 @@ class ProbeServerTests(unittest.TestCase):
             {"Content-Type": content_type, "Content-Length": str(len(body))},
         )
         self.assertEqual(status, 401)
-        self.assertEqual(payload["error"], "invalid_token")
+        self.assertEqual(payload["error"], "authentication_required")
         self.assertEqual(list(self.data_dir.glob("*.json")), [])
         self.assertEqual(list(self.data_dir.glob("*.bin")), [])
 

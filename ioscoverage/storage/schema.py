@@ -19,13 +19,22 @@ from ioscoverage.integrations.git_repository import GitRepositoryError
 from ioscoverage.storage.common import *
 
 
+DATABASE_USER_VERSION = 4
+
+
 class SchemaMixin:
     def _initialize_schema(self) -> None:
-        """Creates API schema 1 with database-enforced immutable Build identities."""
+        """Applies the additive v4 schema without rewriting existing coverage data."""
 
         with self._database() as connection:
+            current_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
+            if current_version > DATABASE_USER_VERSION:
+                raise CoverageStoreError(
+                    "unsupported_database_schema", "coverage database is newer than this server"
+                )
             connection.executescript(
                 """
+                BEGIN IMMEDIATE;
                 CREATE TABLE IF NOT EXISTS coverage_cycles (
                     id TEXT PRIMARY KEY,
                     schema_version INTEGER NOT NULL CHECK(schema_version = 1),
@@ -95,6 +104,39 @@ class SchemaMixin:
                 CREATE UNIQUE INDEX IF NOT EXISTS coverage_cycles_project_mr_unique
                     ON coverage_cycles(project, mr_iid) WHERE mr_iid IS NOT NULL;
 
+                CREATE TABLE IF NOT EXISTS platform_users (
+                    id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    username_key TEXT NOT NULL UNIQUE,
+                    password_scheme TEXT NOT NULL CHECK(password_scheme = 'scrypt-v1'),
+                    password_salt BLOB NOT NULL,
+                    password_digest BLOB NOT NULL,
+                    role TEXT NOT NULL CHECK(role IN ('developer', 'admin')),
+                    status TEXT NOT NULL CHECK(status IN ('active', 'disabled')),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS web_sessions (
+                    token_sha256 TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES platform_users(id),
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS web_sessions_user_index
+                    ON web_sessions(user_id, expires_at);
+
+                CREATE TABLE IF NOT EXISTS cycle_submitters (
+                    cycle_id TEXT NOT NULL REFERENCES coverage_cycles(id),
+                    user_id TEXT NOT NULL REFERENCES platform_users(id),
+                    submitted_at TEXT NOT NULL,
+                    PRIMARY KEY (cycle_id, user_id)
+                );
+
+                CREATE INDEX IF NOT EXISTS cycle_submitters_user_index
+                    ON cycle_submitters(user_id, submitted_at DESC, cycle_id);
+
                 CREATE TRIGGER IF NOT EXISTS coverage_cycles_base_sha_immutable
                 BEFORE UPDATE OF base_sha ON coverage_cycles
                 WHEN OLD.base_sha <> NEW.base_sha
@@ -140,8 +182,7 @@ class SchemaMixin:
                     SELECT RAISE(ABORT, 'build_artifact_identity_is_immutable');
                 END;
 
+                PRAGMA user_version = 4;
+                COMMIT;
                 """
             )
-            current_version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if current_version < 2:
-                connection.execute("PRAGMA user_version = 2")

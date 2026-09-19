@@ -4,6 +4,6 @@ from ioscoverage.web.assets import render_document
 
 
 def render_cycle_list_page() -> bytes:
-    """Returns a data-free same-origin shell that fetches Cycles with operator auth."""
+    """Returns a data-free same-origin shell that authenticates through HttpOnly Cookie."""
 
     return render_document("cycles")

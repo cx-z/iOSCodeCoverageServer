@@ -421,7 +421,7 @@ class APIContractTests(unittest.TestCase):
         )
 
     def test_restricted_token_uploads_run_but_cannot_read_resources(self) -> None:
-        """Allows the iOS token on Run POST while denying every management/read route."""
+        """Allows Run upload and report reads while denying every management route."""
 
         manifest, files = self.build_material()
         self.assertEqual(self.register_build(manifest, files)[0], 201)
@@ -439,7 +439,6 @@ class APIContractTests(unittest.TestCase):
             "/api/v1/builds/" + str(manifest["build_id"]),
             "/api/v1/runs/" + run_id,
             "/api/v1/cycles/" + self.cycle_id + "/analysis",
-            "/api/v1/cycles/" + self.cycle_id + "/report",
         )
         for path in protected_paths:
             with self.subTest(path=path):
@@ -448,6 +447,13 @@ class APIContractTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 403)
                 self.assertEqual(denied["error"], "insufficient_scope")
+        report_status, report_payload = self.request(
+            "GET",
+            "/api/v1/cycles/" + self.cycle_id + "/report",
+            headers={"Authorization": "Bearer " + self.run_upload_token},
+        )
+        self.assertEqual(report_status, 409)
+        self.assertEqual(report_payload["error"], "report_not_available")
         status, operator_result = self.request("GET", "/api/v1/runs/" + run_id)
         self.assertEqual(status, 200)
         self.assertEqual(operator_result["run"]["id"], run_id)

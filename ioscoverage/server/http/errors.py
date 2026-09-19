@@ -25,6 +25,7 @@ from ioscoverage.integrations.gitlab_mr import GitLabMRClientError
 from ioscoverage.integrations.xcode_artifacts import ArtifactValidationError
 from ioscoverage.storage.analysis_state import AnalysisStateStoreError
 from ioscoverage.storage.coverage_store import CoverageStoreError
+from ioscoverage.storage.accounts import AccountStoreError
 from ioscoverage.storage.reports import CoverageReportError
 from ioscoverage.server.config import *
 from ioscoverage.web.pages.cycles import render_cycle_list_page
@@ -32,6 +33,26 @@ from ioscoverage.web.pages.report import render_coverage_report_page
 
 
 class ErrorResponseMixin:
+    def _send_account_error(self, error: Exception) -> None:
+        """Maps account validation and lifecycle failures without credential details."""
+
+        code = getattr(error, "code", "invalid_request")
+        message = getattr(error, "message", "account request is invalid")
+        if code in ("invalid_credentials", "account_disabled"):
+            status = HTTPStatus.UNAUTHORIZED
+            code = "invalid_credentials"
+            message = "username or password is invalid"
+        elif code == "username_conflict":
+            status = HTTPStatus.CONFLICT
+        elif code == "user_not_found":
+            status = HTTPStatus.NOT_FOUND
+        elif code == "account_store_unavailable":
+            status = HTTPStatus.SERVICE_UNAVAILABLE
+        else:
+            status = HTTPStatus.BAD_REQUEST
+        self._log_event("account_request_rejected", level=logging.WARNING, reason=code)
+        self._send_json(status, {"error": code, "message": message})
+
     def _send_report_error(self, error: CoverageReportError) -> None:
         """Maps bounded report failures without exposing filesystem evidence."""
 

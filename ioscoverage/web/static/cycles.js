@@ -1,16 +1,14 @@
-    const tokenKey = 'ios-coverage-operator-token';
-    let token = sessionStorage.getItem(tokenKey) || '';
     let loadedCycles = [];
-    const tokenInput = document.getElementById('token');
-    tokenInput.value = token;
+    let createdCycle = null;
 
     async function api(path, options={}) {
-      const headers = Object.assign({}, options.headers || {}, {Authorization:`Bearer ${token}`});
-      const response = await fetch(path, Object.assign({}, options, {headers,cache:'no-store'}));
+      const response = await fetch(path, Object.assign({cache:'no-store',credentials:'same-origin'}, options));
       let payload = {};
       try { payload = await response.json(); } catch (_) { payload = {error:'invalid_response'}; }
-      if (response.status === 401 || response.status === 403) throw new Error('TOKEN_INVALID');
-      if (!response.ok) throw new Error(payload.message || payload.error || `HTTP ${response.status}`);
+      if (!response.ok) {
+        const error = new Error(payload.message || payload.error || `HTTP ${response.status}`);
+        error.status = response.status; error.code = payload.error; throw error;
+      }
       return payload;
     }
 
@@ -41,13 +39,37 @@
         else { mrCell.textContent = label; }
         row.append(mrCell);
         addCell(row, cycle.target_branch); addCell(row, cycle.status); addCell(row, `${cycle.build_count} / ${cycle.run_count}`);
-        const updated = cycle.updated_at ? new Date(cycle.updated_at).toLocaleString() : '—'; addCell(row, updated);
+        addCell(row, Array.isArray(cycle.submitters) ? cycle.submitters.map(item => item.username).join(', ') : '—');
+        addCell(row, cycle.updated_at ? new Date(cycle.updated_at).toLocaleString() : '—');
         const idCell = addCell(row, ''); const idCode = document.createElement('code'); idCode.textContent = cycle.id; idCell.append(idCode);
         const actionCell = document.createElement('td'); actionCell.className = 'actions';
         const open = document.createElement('button'); open.type = 'button'; open.textContent = '查看报告'; open.addEventListener('click', () => { location.assign(`/cycles/${encodeURIComponent(cycle.id)}`); });
         const copy = document.createElement('button'); copy.type = 'button'; copy.className = 'secondary'; copy.textContent = '复制 ID'; copy.addEventListener('click', () => navigator.clipboard.writeText(cycle.id));
         actionCell.append(open, copy); row.append(actionCell); body.append(row);
       }
+    }
+
+    function showAuthenticated(user) {
+      document.getElementById('current-user').textContent = user.username;
+      document.getElementById('current-role').textContent = user.role;
+      document.getElementById('admin-users').hidden = user.role !== 'admin';
+      document.getElementById('identity').hidden = false;
+      document.getElementById('content').hidden = false;
+    }
+
+    function redirectToLogin() {
+      loadedCycles = []; createdCycle = null;
+      document.getElementById('identity').hidden = true;
+      document.getElementById('content').hidden = true;
+      document.getElementById('cycle-rows').replaceChildren();
+      location.assign('/login/');
+    }
+
+    function showRequestError(error) {
+      if (error.status === 401) { redirectToLogin(); return; }
+      const message = document.getElementById('page-error');
+      message.textContent = error.message;
+      message.hidden = false;
     }
 
     async function loadCycles() {
@@ -59,25 +81,21 @@
       filter.value = selected; renderCycles(selected ? loadedCycles.filter(c => c.project === selected) : loadedCycles);
     }
 
-    async function connect() {
-      token = tokenInput.value.trim(); if (!token) return;
-      sessionStorage.setItem(tokenKey, token); document.getElementById('auth-error').textContent = '';
-      try { await loadCycles(); document.getElementById('auth-panel').hidden = true; document.getElementById('content').hidden = false; }
-      catch (error) { if (error.message === 'TOKEN_INVALID') { sessionStorage.removeItem(tokenKey); token = ''; document.getElementById('auth-error').textContent = 'Token 不正确或权限不足。'; } else { document.getElementById('auth-error').textContent = error.message; } }
-    }
-
     async function createCycle(event) {
       event.preventDefault(); const status = document.getElementById('create-status'); status.textContent = '正在读取 MR…';
       try {
         const payload = await api('/api/v1/cycles', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({schema_version:1,mr_url:document.getElementById('mr-url').value.trim()})});
-        status.textContent = payload.status === 'reused' ? '已找到现有 Cycle，正在打开…' : 'Cycle 已创建，正在打开…';
-        location.assign(`/cycles/${encodeURIComponent(payload.cycle.id)}`);
-      } catch (error) { status.textContent = error.message === 'TOKEN_INVALID' ? 'Token 不正确或权限不足。' : error.message; }
+        createdCycle = payload.cycle; document.getElementById('created-cycle-id').textContent = payload.cycle.id;
+        document.getElementById('created-cycle').hidden = false;
+        status.textContent = payload.submission_status === 'existing' ? '该账号已提交过此 MR，已复用现有 Cycle。' : (payload.status === 'reused' ? '已复用现有 Cycle，并记录本次提交关系。' : 'Cycle 已创建。');
+        await loadCycles();
+      } catch (error) { if (error.status === 401) redirectToLogin(); else status.textContent = error.message; }
     }
 
-    document.getElementById('connect').addEventListener('click', connect);
-    tokenInput.addEventListener('keydown', event => { if (event.key === 'Enter') connect(); });
-    document.getElementById('refresh').addEventListener('click', () => loadCycles().catch(error => { document.getElementById('create-status').textContent = error.message; }));
+    document.getElementById('logout').addEventListener('click', async () => { try { await api('/api/v1/auth/logout', {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); redirectToLogin(); } catch (error) { showRequestError(error); } });
+    document.getElementById('refresh').addEventListener('click', () => loadCycles().catch(showRequestError));
     document.getElementById('project-filter').addEventListener('change', event => renderCycles(event.target.value ? loadedCycles.filter(c => c.project === event.target.value) : loadedCycles));
     document.getElementById('create-form').addEventListener('submit', createCycle);
-    if (token) connect();
+    document.getElementById('copy-created-cycle').addEventListener('click', () => { if (createdCycle) navigator.clipboard.writeText(createdCycle.id); });
+    document.getElementById('open-created-report').addEventListener('click', () => { if (createdCycle) location.assign(`/cycles/${encodeURIComponent(createdCycle.id)}`); });
+    api('/api/v1/auth/session').then(payload => { showAuthenticated(payload.user); return loadCycles(); }).catch(showRequestError);

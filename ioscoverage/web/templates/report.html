@@ -12,15 +12,10 @@ __INLINE_CSS__
 <body>
   <header><div class="header-inner">
     <div><h1>iOS 变更行覆盖报告</h1><div class="muted"><a href="/cycles/">返回 Cycle 列表</a> · Cycle <code id="cycle-id"></code></div></div>
-    <div><div class="status"><span id="status-dot" class="dot"></span><span id="status-text">未连接</span></div><div id="updated-at" class="muted">—</div></div>
+    <div><div class="status"><span id="status-dot" class="dot"></span><span id="status-text">正在加载</span></div><div id="updated-at" class="muted">—</div><button id="retry-analysis" hidden>重新分析</button></div>
   </div></header>
   <main class="page">
-    <section id="auth-panel" class="auth">
-      <strong>输入本机 Coverage Token</strong>
-      <div class="muted">Token 只保存在当前浏览器标签页，不写入 URL、Cookie 或服务端日志。</div>
-      <div class="auth-row"><input id="token" type="password" autocomplete="off" placeholder="Bearer Token"><button id="connect">查看报告</button></div>
-      <div id="auth-error" class="error"></div>
-    </section>
+    <div id="page-error" class="auth error" hidden></div>
     <section id="content" hidden>
       <div class="cards">
         <div class="card covered"><span>Covered</span><strong id="covered">—</strong></div>

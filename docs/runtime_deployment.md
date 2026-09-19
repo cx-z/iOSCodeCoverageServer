@@ -36,6 +36,7 @@ cp config/projects.example.json /absolute/coverage-runtime/config/projects.json
 <runtime_root>/config/projects.json
 <runtime_root>/state/gitlab_api_token
 <runtime_root>/state/operator_token
+<runtime_root>/state/packaging_token
 <runtime_root>/state/run_upload_token
 <runtime_root>/instance/coverage.sqlite3
 <runtime_root>/data/
@@ -55,9 +56,9 @@ python3 server.py
 
 ## 凭证
 
-`operator_token` 是浏览器、管理 API、Build 注册和诊断使用的操作员凭证；`run_upload_token` 只允许 probe 和 Run 上传；`gitlab_api_token` 只用于注册表内 GitLab 项目的 MR GET。任何 Token 都不得进入日志、HTML、SQLite、Build manifest 或分析结果。
+浏览器使用平台账号的 HttpOnly Session，不读取机器 Token。`operator_token` 只保留完整管理员兼容能力；`packaging_token` 只允许已知 Cycle GET/PATCH 与 Build POST/GET；`run_upload_token` 只允许 probe 和 Run 上传；`gitlab_api_token` 只用于注册表内 GitLab 项目的 MR GET。原始 Session 与任何 Token都不得进入日志、HTML、SQLite 明文字段、Build manifest 或分析结果。
 
-操作员和 Run Token 在首次启动时安全生成，之后跨重启复用，权限为 `0600`。GitLab Token 不自动生成；缺失或失效只会使 MR URL 查询失败，不影响服务启动、已有 Run 上传与报告读取。部署者写入 GitLab Token 后应确保文件权限为 `0600`，且不要用会把内容写到终端或日志的诊断命令查看它。
+operator、packaging 和 Run Token在首次启动时安全生成，之后跨重启复用，权限为 `0600`，且必须两两不同。GitLab Token不自动生成；缺失或失效只会使 MR URL查询失败，不影响服务启动、已有 Run上传与报告读取。首次部署用 `python3 manage_users.py create-admin --username <name>` 隐藏输入初始管理员密码。部署者写入 GitLab Token后应确保文件权限为 `0600`，且不要用会把内容写到终端或日志的诊断命令查看它。
 
 ## 路径约束
 

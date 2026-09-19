@@ -11,6 +11,7 @@ from ioscoverage.lifecycle.manager import RuntimeCleanupManager
 from ioscoverage.integrations.gitlab_mr import GitLabMRClient
 from ioscoverage.server.mr_coverage_resolver import MergeRequestCoverageResolver
 from ioscoverage.storage.analysis_state import AnalysisStateStore
+from ioscoverage.storage.accounts import AccountStore
 from ioscoverage.storage.coverage_store import CoverageStore
 from ioscoverage.storage.reports import CoverageReportStore
 
@@ -41,6 +42,8 @@ class ProbeConfig:
     analysis_scheduler: Optional[AnalysisScheduler]
     runtime_cleanup_manager: Optional[RuntimeCleanupManager] = None
     run_upload_token: Optional[str] = None
+    packaging_token: Optional[str] = None
+    account_store: Optional[AccountStore] = None
     anonymous_read: bool = False
     gitlab_mr_client: Optional[GitLabMRClient] = None
     report_store: Optional[CoverageReportStore] = None

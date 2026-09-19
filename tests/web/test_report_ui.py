@@ -255,6 +255,24 @@ class CoverageReportStoreTests(unittest.TestCase):
         self.assertEqual(report["files"][0]["uncovered"], 1)
         self.assertNotIn("output_directory", json.dumps(report))
 
+    def test_path_mapping_failure_keeps_previous_report_readable(self):
+        """Retains the exact successful report after a safe mapping failure."""
+
+        previous = self.fixture.store.get_report(self.fixture.cycle_id)
+        self.fixture.state_store.request_analysis(self.fixture.cycle_id, "manual_retry")
+        generation = self.fixture.state_store.claim(self.fixture.cycle_id)
+        self.fixture.state_store.complete_failure(
+            self.fixture.cycle_id, generation, "current_diff",
+            "coverage_path_mapping_failed", "compiler coverage could not be mapped",
+        )
+        report = self.fixture.store.get_report(self.fixture.cycle_id)
+        self.assertEqual(report["generation"], previous["generation"])
+        self.assertEqual(report["summary"], previous["summary"])
+        self.assertEqual(report["files"], previous["files"])
+        state = self.fixture.state_store.get_state(self.fixture.cycle_id)
+        self.assertEqual(state["status"], "failed")
+        self.assertEqual(state["latest_success_generation"], 1)
+
     def test_file_detail_distinguishes_current_and_historical_sources(self):
         """Explains whether each covered line came from current or inherited evidence."""
 
@@ -376,8 +394,10 @@ class CoverageReportHTTPTests(unittest.TestCase):
         text = body.decode()
         self.assertEqual(status, 200)
         self.assertIn("只看未覆盖代码", text)
-        self.assertIn("setTimeout(() => refresh(false), 2000)", text)
-        self.assertIn("sessionStorage", text)
+        self.assertIn("setTimeout(refresh, 2000)", text)
+        self.assertNotIn("sessionStorage", text)
+        self.assertNotIn("ios-coverage-operator-token", text)
+        self.assertNotIn("Authorization", text)
         self.assertNotIn(self.fixture.path, text)
         self.assertIn("frame-ancestors 'none'", dict(headers)["Content-Security-Policy"])
 

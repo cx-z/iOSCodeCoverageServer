@@ -19,6 +19,7 @@ from ioscoverage.analysis.command_runner import EvidenceCommandRunner
 from ioscoverage.analysis.mapping.coverage_export import (
     CoverageExportError,
     NormalizedCoverage,
+    fixed_git_sources,
     normalize_coverage_export,
     regions_for_source_line,
 )
@@ -36,7 +37,7 @@ from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore
 
 
 DIFF_ANALYSIS_SCHEMA_VERSION = 1
-DIFF_ANALYZER_VERSION = "single-build-diff/2"
+DIFF_ANALYZER_VERSION = "single-build-diff/3"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 SUPPORTED_COVERAGE_BINARIES = ("main_executable", "debug_dylib")
 
@@ -103,14 +104,14 @@ class SingleBuildDiffAnalyzer:
                 )
             )
             export_payload = self._load_json(export_path, "coverage_export_invalid")
-            try:
-                normalized_coverage = normalize_coverage_export(
-                    export_payload, repository_path
-                )
-            except CoverageExportError as error:
-                raise SingleBuildDiffAnalysisError(error.code, error.message) from error
-
             self._validate_git_snapshot(runner, build, repository_path)
+            git_paths, load_source = fixed_git_sources(
+                lambda label, arguments: self._run_git(runner, label, arguments),
+                repository_path, str(build["git_sha"]), "git-coverage",
+            )
+            normalized_coverage = normalize_coverage_export(
+                export_payload, repository_path, git_paths, load_source
+            )
             normalized_files = self._generate_git_diff(runner, build, repository_path)
             normalized_diff = normalized_diff_document(normalized_files)
             normalized_diff_sha256 = self._json_sha256(normalized_diff)

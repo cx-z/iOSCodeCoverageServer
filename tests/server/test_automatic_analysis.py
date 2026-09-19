@@ -179,7 +179,7 @@ class AnalysisStateStoreTests(unittest.TestCase):
         self.workspace.close()
 
     def test_migration_preserves_existing_builds_and_runs(self):
-        """Adds only the analysis table and advances v2 to v3."""
+        """Adds only the analysis table while leaving full v4 ownership to the main schema."""
 
         with sqlite3.connect(str(self.workspace.database)) as connection:
             self.assertEqual(connection.execute("SELECT count(*) FROM builds").fetchone()[0], 4)

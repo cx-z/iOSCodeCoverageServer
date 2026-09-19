@@ -4,7 +4,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 
 SUPPORTED_EXPORT_VERSIONS = {"2.0.1"}
@@ -77,14 +77,16 @@ class NormalizedCoverage:
                 }
                 for path in all_paths
             ],
-            "unmapped_coverage_files": list(self.unmapped_files),
+            "unmapped_coverage_file_count": len(self.unmapped_files),
         }
 
 
 def normalize_coverage_export(
-    payload: Mapping[str, object], repository_path: Path
+    payload: Mapping[str, object], repository_path: Path,
+    git_paths: Optional[Sequence[str]] = None,
+    source_loader: Optional[Callable[[str], str]] = None,
 ) -> NormalizedCoverage:
-    """Maps only proven repository-absolute filenames and code regions."""
+    """Maps local paths, or unique foreign-root paths checked against a fixed Git tree."""
 
     if payload.get("type") != "llvm.coverage.json.export":
         raise CoverageExportError("coverage_export_unsupported", "unsupported llvm-cov export type")
@@ -105,6 +107,39 @@ def normalize_coverage_export(
         )
 
     root = repository_path.resolve()
+    filenames = {record.get("filename") for record in files if isinstance(record, dict)}
+    for function in functions:
+        if isinstance(function, dict) and isinstance(function.get("filenames"), list):
+            filenames.update(value for value in function["filenames"] if isinstance(value, str))
+    path_map: Dict[str, Optional[str]] = {}
+    foreign_roots: Set[str] = set()
+    trusted_paths = set(git_paths or ())
+    for filename in filenames:
+        if not isinstance(filename, str):
+            continue
+        local = _coverage_repo_path(filename, root)
+        if local is not None and (git_paths is None or local in trusted_paths):
+            path_map[filename] = local
+            continue
+        path_map[filename] = None
+        if git_paths is None or source_loader is None or not _valid_compiler_path(filename):
+            continue
+        parts = PurePosixPath(filename).parts
+        candidates = []
+        for path in trusted_paths:
+            suffix = PurePosixPath(path).parts
+            if len(parts) <= len(suffix) or tuple(parts[-len(suffix):]) != suffix:
+                continue
+            prefix = PurePosixPath(*parts[:-len(suffix)])
+            if prefix.name == root.name:
+                candidates.append((path, str(prefix)))
+        if len(candidates) == 1:
+            path_map[filename] = candidates[0][0]
+            foreign_roots.add(candidates[0][1])
+    if len(foreign_roots) > 1:
+        raise CoverageExportError(
+            "coverage_path_mapping_ambiguous", "compiler files resolve through multiple source roots"
+        )
     file_segments: Dict[str, object] = {}
     conflicts: Dict[str, str] = {}
     unmapped: Set[str] = set()
@@ -112,7 +147,7 @@ def normalize_coverage_export(
         if not isinstance(file_record, dict) or not isinstance(file_record.get("filename"), str):
             raise CoverageExportError("coverage_export_invalid", "coverage file record is invalid")
         filename = str(file_record["filename"])
-        relative = _coverage_repo_path(filename, root)
+        relative = path_map.get(filename)
         if relative is None:
             unmapped.add(filename)
             continue
@@ -148,7 +183,7 @@ def normalize_coverage_export(
             if file_id < 0 or file_id >= len(filenames):
                 raise CoverageExportError("coverage_export_invalid", "coverage region file index is invalid")
             filename = filenames[file_id]
-            relative = _coverage_repo_path(filename, root)
+            relative = path_map.get(filename)
             if relative is None:
                 unmapped.add(filename)
                 continue
@@ -185,6 +220,49 @@ def normalize_coverage_export(
                 )
             )
 
+    if source_loader is not None:
+        for filename, relative in path_map.items():
+            if relative is None or _coverage_repo_path(filename, root) is not None:
+                continue
+            try:
+                source_lines = source_loader(relative).splitlines()
+            except (OSError, UnicodeError) as error:
+                raise CoverageExportError(
+                    "coverage_path_source_mismatch", "mapped compiler source cannot be read at Build Git SHA"
+                ) from error
+            for region in regions.get(relative, ()):
+                _, error = regions_for_source_line((region,), region.start_line, source_lines)
+                if error:
+                    raise CoverageExportError(
+                        "coverage_path_source_mismatch", "compiler region exceeds Build Git source"
+                    )
+            segments = file_segments.get(relative, ())
+            for segment in segments:
+                if (not isinstance(segment, list) or len(segment) < 2
+                    or not all(isinstance(value, int) and not isinstance(value, bool) for value in segment[:2])
+                    or segment[0] < 1 or segment[0] > len(source_lines)
+                    or segment[1] < 1 or segment[1] > len(source_lines[segment[0] - 1].encode("utf-8")) + 1):
+                    raise CoverageExportError(
+                        "coverage_path_source_mismatch", "compiler segments exceed Build Git source"
+                    )
+    has_code = any(
+        isinstance(function, dict) and isinstance(function.get("regions"), list)
+        and any(isinstance(region, list) and len(region) == 8 and region[7] == CODE_REGION_KIND
+                and (region[0], region[1]) != (region[2], region[3])
+                for region in function["regions"])
+        for function in functions
+    )
+    has_code = has_code or any(
+        isinstance(record, dict) and isinstance(record.get("segments"), list)
+        and any(isinstance(segment, list) and len(segment) >= 6
+                and segment[3] is True and segment[5] is False
+                for segment in record["segments"])
+        for record in files
+    )
+    if has_code and not any(regions.values()):
+        raise CoverageExportError(
+            "coverage_path_mapping_failed", "compiler coverage exists but no Build Git source could be mapped"
+        )
     return NormalizedCoverage(
         export_version=str(version),
         regions_by_path={
@@ -235,10 +313,7 @@ def _region_intersects_line(
 def _coverage_repo_path(filename: str, repository_root: Path) -> Optional[str]:
     """Strictly maps one normalized absolute compiler path under the fixed root."""
 
-    if not filename or "\x00" in filename or not os.path.isabs(filename):
-        return None
-    normalized = os.path.normpath(filename)
-    if normalized != filename:
+    if not _valid_compiler_path(filename):
         return None
     path = Path(filename).resolve()
     try:
@@ -249,3 +324,44 @@ def _coverage_repo_path(filename: str, repository_root: Path) -> Optional[str]:
     if not value or value == "." or ".." in PurePosixPath(value).parts:
         return None
     return value
+
+
+def _valid_compiler_path(filename: str) -> bool:
+    """Rejects traversal, aliases, and nonabsolute compiler names before matching."""
+
+    return bool(filename and "\x00" not in filename and os.path.isabs(filename)
+                and os.path.normpath(filename) == filename
+                and "." not in PurePosixPath(filename).parts
+                and ".." not in PurePosixPath(filename).parts)
+
+
+def fixed_git_sources(
+    run_git: Callable[[str, Sequence[str]], object], repository_root: Path,
+    git_sha: str, label_prefix: str,
+) -> Tuple[Tuple[str, ...], Callable[[str], str]]:
+    """Provides source only from one registered repository's immutable Git tree."""
+
+    repository = str(repository_root.resolve())
+    result = run_git(
+        label_prefix + "-tree",
+        ["git", "-C", repository, "ls-tree", "-r", "-z", "--name-only", git_sha],
+    )
+    paths = tuple(path for path in result.stdout.split("\x00") if path)
+    if any(path.startswith("/") or "\x00" in path or
+           any(part in ("", ".", "..") for part in path.split("/")) for path in paths):
+        raise CoverageExportError("coverage_git_tree_invalid", "Build Git tree has invalid source paths")
+    cache: Dict[str, str] = {}
+
+    def load_source(path: str) -> str:
+        """Reads one enumerated blob, caching it for repeated compiler records."""
+
+        if path not in paths:
+            raise CoverageExportError("coverage_git_tree_invalid", "source path is absent from Build Git tree")
+        if path not in cache:
+            label = label_prefix + "-source-{:04d}".format(len(cache) + 1)
+            cache[path] = run_git(
+                label, ["git", "-C", repository, "show", git_sha + ":" + path]
+            ).stdout
+        return cache[path]
+
+    return paths, load_source

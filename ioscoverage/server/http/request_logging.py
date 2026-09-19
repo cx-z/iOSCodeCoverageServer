@@ -38,6 +38,9 @@ class RequestLoggingMixin:
 
         self.request_id = uuid.uuid4().hex[:12]
         self.request_started_at = time.monotonic()
+        self._request_principal_resolved = False
+        self._request_principal = None
+        self._invalid_bearer = False
         self._log_event(
             "request_started",
             content_length=self._parse_content_length(),

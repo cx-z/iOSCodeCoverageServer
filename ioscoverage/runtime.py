@@ -46,6 +46,10 @@ class RuntimePaths:
         return self.state_dir / "operator_token"
 
     @property
+    def packaging_token(self) -> Path:
+        return self.state_dir / "packaging_token"
+
+    @property
     def run_upload_token(self) -> Path:
         return self.state_dir / "run_upload_token"
 

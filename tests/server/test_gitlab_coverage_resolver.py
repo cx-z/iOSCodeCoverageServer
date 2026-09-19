@@ -497,11 +497,11 @@ class GitLabCoverageResolverHTTPTests(unittest.TestCase):
         self.thread.join(timeout=3)
 
     def test_only_operator_token_can_resolve(self):
-        """Returns 401 for unknown credentials and 403 for the restricted Run token."""
+        """Returns 401 for unknown credentials and permits authenticated read scopes."""
 
         self.assertEqual(self._request(None)[0], 401)
         self.assertEqual(self._request("wrong-token")[0], 401)
-        self.assertEqual(self._request(self.run_token)[0], 403)
+        self.assertEqual(self._request(self.run_token)[0], 200)
         status, body = self._request(self.operator_token)
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["status"], "cycle_not_found")
@@ -584,12 +584,13 @@ class GitLabCoverageResolverAnonymousReadHTTPTests(GitLabCoverageResolverHTTPTes
     anonymous_read = True
 
     def test_only_operator_token_can_resolve(self):
-        """Anonymous read allows every credential shape to reach the resolver."""
+        """Anonymous read permits absence but still rejects an explicitly invalid Bearer."""
 
-        for token in (None, "wrong-token", self.run_token):
+        for token in (None, self.run_token):
             status, body = self._request(token)
             self.assertEqual(status, 200)
             self.assertEqual(json.loads(body)["status"], "cycle_not_found")
+        self.assertEqual(self._request("wrong-token")[0], 401)
 
     def test_anonymous_read_keeps_write_and_list_routes_token_protected(self):
         """Cycle creation and the cycles list still require the operator Token."""

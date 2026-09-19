@@ -55,6 +55,19 @@ class TokenStoreTests(unittest.TestCase):
             self.assertEqual(first_run_token, second_run_token)
             self.assertEqual(stat.S_IMODE(run_path.stat().st_mode), 0o600)
 
+    def test_packaging_token_is_persistent_owner_only_and_distinct(self) -> None:
+        """Keeps the build-machine credential separate with owner-only permissions."""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            operator = TokenStore(root / "operator_token").load_or_create()
+            packaging_path = root / "packaging_token"
+            packaging = TokenStore(packaging_path).load_or_create()
+            run_upload = TokenStore(root / "run_upload_token").load_or_create()
+            self.assertEqual(TokenStore(packaging_path).load_or_create(), packaging)
+            self.assertEqual(len({operator, packaging, run_upload}), 3)
+            self.assertEqual(stat.S_IMODE(packaging_path.stat().st_mode), 0o600)
+
 
 if __name__ == "__main__":
     unittest.main()

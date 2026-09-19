@@ -2,7 +2,7 @@
 
 实现定位从 [知识库入口](../knowledge/README.md) 开始；本文件继续作为 HTTP 路径、字段、状态码和错误码的事实源。
 
-协议版本：`schema_version = 1`。服务根地址为 `http://<Mac-LAN-IP>:8765`；当前局域网 IP 以启动脚本输出为准。`GET /health` 和不含数据的 HTML 外壳公开；JSON 接口按以下两类凭证鉴权。当 `config/server.json` 启用 `anonymous_read: true` 时，GitLab MR 扩展使用的只读接口（§5 报告摘要/文件明细、§6 MR 覆盖率解析）在可信内网放行无 Token 访问；写接口与 `/cycles/` 管理页面不受影响。
+协议版本：`schema_version = 1`。服务根地址为 `http://<Mac-LAN-IP>:8765`；当前局域网 IP 以启动脚本输出为准。`GET /health`、认证页和不含数据的报告 HTML 外壳公开；`GET /cycles/` 工作台 HTML 只供有效 Web Session 使用。Web 使用 HttpOnly Session，机器调用使用 Bearer Token。当 `config/server.json` 启用 `anonymous_read: true` 时，GitLab MR 扩展使用的只读接口（§5 报告摘要/文件明细、§6 MR 覆盖率解析）在可信内网放行无 Token 访问。
 
 Cycle 的 `base_sha` 保留为首次提测审计字段；每个 Build 使用必填的 `git_sha`、`target_sha_at_build` 和 `merge_base_sha` 固化自己的比较快照，并用 `coverage_binary` 固化唯一分析主体。iPhone 只调用 Run 与网络探针接口；Build 大文件由 Mac 打包脚本注册。
 
@@ -10,14 +10,41 @@ Cycle 的 `base_sha` 保留为首次提测审计字段；每个 Build 使用必�
 Authorization: Bearer <token>
 ```
 
-| Token | 允许接口 |
+| 身份 | 允许接口 |
 | --- | --- |
-| `<runtime_root>/state/operator_token` 操作员 Token | 所有现有管理、Build、Run、analysis 和报告接口 |
+| developer Session | 注册/登录/退出、自己的 Cycle 列表、Web 提交过的已知 Cycle |
+| admin Session | 全部 Cycle和提交账号、账号管理、analysis retry、cleanup |
+| `<runtime_root>/state/operator_token` 操作员 Token | 全部兼容管理接口 |
+| `<runtime_root>/state/packaging_token` packaging Token | 已知 Cycle GET/PATCH、Build POST/GET |
 | `<runtime_root>/state/run_upload_token` iOS Token | `POST /api/v1/probes`、`POST /api/v1/runs` |
 
-有效 iOS Token访问其他接口返回 HTTP 403 `insufficient_scope`；无效 Token返回 HTTP 401 `invalid_token`。GitLab PAT 只由服务端读取固定 MR GET，不是 Coverage HTTP 凭证。`anonymous_read` 只放行不创建、不修改、不删除数据的只读接口，公网或不可信网络部署应保持为 `false`。
+有效但 scope 不足的 Token返回 HTTP 403 `insufficient_scope`；无效 Token返回 HTTP 401 `invalid_token`，且有 Authorization 时绝不回退 Cookie。GitLab PAT 只由服务端读取固定 MR GET，不是 Coverage HTTP 凭证。`anonymous_read` 只放行不创建、不修改、不删除数据的只读接口，公网或不可信网络部署应保持为 `false`。
 
 JSON 响应均为 UTF-8、`Cache-Control: no-store`。错误响应至少包含稳定的 `error` 代码和可读 `message`。客户端不应依赖 `message` 文案。
+
+## 0. Web 账号与 Session
+
+页面入口：`GET /login/` 默认显示登录表单，可切换为注册；已有有效 Web Session 临时跳转到 `/cycles/`。`GET /cycles/` 是登录后工作台，未登录时临时跳转到 `/login/`；机器 Bearer Token 不能代替浏览器 Session 访问。`/` 仍是 Safari probe 入口，报告页 `/cycles/<cycle_id>` 与插件只读 API 不受工作台页面门禁影响。页面和跳转均使用 `Cache-Control: no-store`。
+
+账号接口：
+
+```text
+POST /api/v1/auth/register
+POST /api/v1/auth/login
+GET  /api/v1/auth/session
+POST /api/v1/auth/logout
+
+GET   /api/v1/admin/users
+POST  /api/v1/admin/users
+PATCH /api/v1/admin/users/<user_id>/status
+POST  /api/v1/admin/users/<user_id>/reset-password
+```
+
+注册和登录只接受 `schema_version`、`username`、`password`；注册固定创建 developer，不能注入 role/status/id。用户名为 3～32 位受限 ASCII，大小写不敏感唯一；密码为 8～128 字符且 UTF-8 不超过 256 bytes。密码使用独立随机 salt 的 scrypt 摘要存储，不保存明文。
+
+成功注册/登录设置 `ios_coverage_session` Cookie：`HttpOnly; SameSite=Strict; Path=/`，固定七天过期且不滑动。注册页收到成功响应后直接进入工作台，不再调用登录接口。原始 Session Token只进入 Set-Cookie；SQLite 仅保存 SHA-256。退出只撤销当前 Session 并返回默认登录页；停用或重置密码原子撤销该账号全部 Session。Session 写请求要求 JSON Content-Type 和严格同源 `Origin/Host`。
+
+管理员创建账号的请求为 `schema_version + username + password + role`，role 仅为 developer/admin；状态修改为 `schema_version + status`，status 仅为 active/disabled；密码重置为 `schema_version + password`。operator Bearer 保留管理员兼容能力，其他机器 scope 无权管理账号。
 
 ## 1. Cycle
 
@@ -60,7 +87,7 @@ curl --fail-with-body \
 }
 ```
 
-同一 `project + mr_iid` 已存在时返回 HTTP 200，`status` 为 `reused`，并返回原 `cycle.id` 及其不可变审计字段。新建 Cycle 的 `project`、IID、canonical URL、目标分支、base/head SHA 均来自校验后的 GitLab MR。
+同一 `project + mr_iid` 已存在时返回 HTTP 200，`status` 为 `reused`，并返回原 `cycle.id` 及其不可变审计字段。Web 用户响应另含 `submission_status: added|existing`；Cycle 创建/复用与提交关系写入同一事务。新建 Cycle 的 `project`、IID、canonical URL、目标分支、base/head SHA 均来自校验后的 GitLab MR。
 
 常见稳定错误：
 
@@ -99,7 +126,7 @@ curl --fail-with-body \
   --data '{"schema_version":1,"head_sha":"3333333333333333333333333333333333333333"}'
 ```
 
-列表按 `updated_at`、`id` 从新到旧稳定排序，每项包含 `project`、展示用 `project_display_name`、MR 身份、`target_branch`、状态、时间及实时聚合的 `build_count`、`run_count`。只读投影还返回注册表确定的 `gitlab_host` 与 `gitlab_project_path`，供浏览器在创建 MR 外链前执行精确 host/project 校验；这些展示字段和计数均不做冗余持久化。
+列表按 `updated_at`、`id` 从新到旧稳定排序。developer 只返回当前账号通过 Web 提交过的 Cycle且不泄露其他用户名；admin 返回全部 Cycle并附提交用户名；operator 保持全量兼容。历史无提交关系 Cycle只对 admin/operator 可枚举，developer 重新提交该 MR 后建立关系。packaging、run_upload 和 anonymous 不能列表或创建 Cycle。每项包含 `project`、展示用 `project_display_name`、MR 身份、`target_branch`、状态、时间及实时聚合的 `build_count`、`run_count`。
 
 PATCH 只接受 `schema_version` 和 `head_sha`；携带 `base_sha`、`id` 或其他字段会返回 HTTP 400。
 
@@ -365,7 +392,7 @@ iOS 上传客户端应按以下规则实现：
 
 ## 5. 独立分析状态接口
 
-以下接口只供 Mac 操作人员、调试工具或报告页面使用，均要求操作员 Token；iOS Run Token 返回 403：
+以下接口供 admin Session或 operator 管理；iOS Run 和 packaging Token返回 403：
 
 ```text
 GET  /api/v1/cycles/<cycle_id>/analysis
@@ -419,11 +446,11 @@ GET /api/v1/cycles/<cycle_id>/report
 GET /api/v1/cycles/<cycle_id>/report/files/<file_id>
 ```
 
-默认要求 Bearer Token；`anonymous_read: true` 时在可信内网放行无 Token 访问。`file_id` 是服务端签发的仓库相对路径 SHA-256，不接受路径、Git SHA、Build、Run、命令或输出目录。HTML 入口 `GET /cycles/<cycle_id>` 不携带报告数据，页面取得 Token 后才调用上述接口。完整字段和安全边界见 [本地覆盖率报告页](coverage_report_ui.md)。
+默认要求任一有效平台身份；`anonymous_read: true` 时在可信内网放行无凭证访问。`file_id` 是服务端签发的仓库相对路径 SHA-256，不接受路径、Git SHA、Build、Run、命令或输出目录。HTML 入口 `GET /cycles/<cycle_id>` 不携带报告数据，页面通过同源 Session 或启用的匿名只读边界调用上述接口，不读取机器 Token。完整字段和安全边界见 [本地覆盖率报告页](coverage_report_ui.md)。
 
 ## 6. GitLab MR Coverage 只读解析
 
-浏览器扩展将一个已注册项目的 MR 页面 URL 解析为当前 GitLab diff 与 latest success 报告之间的可信关系。该接口只读：默认要求操作员 Token；`anonymous_read: true` 时在可信内网放行无 Token 访问（GitLab MR 扩展零配置场景）：
+浏览器扩展将一个已注册项目的 MR 页面 URL 解析为当前 GitLab diff 与 latest success 报告之间的可信关系。该接口只读：默认要求任一有效平台身份；`anonymous_read: true` 时在可信内网放行无 Token 访问（GitLab MR 扩展零配置场景）：
 
 ```text
 POST /api/v1/integrations/gitlab/merge-request-coverage/resolve
@@ -516,7 +543,7 @@ Build.git_sha             == GitLab.diff_refs.head_sha
 
 ## 7. Runtime cleanup maintenance
 
-The following endpoints require the operator Token. The restricted iOS Run Token returns HTTP 403:
+The following endpoints require an admin Session or the operator Token. Packaging and restricted iOS Run Tokens return HTTP 403:
 
 ```text
 GET  /api/v1/maintenance/cleanup

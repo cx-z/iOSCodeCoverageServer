@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>登录 · iOS 真机覆盖率 Cycle</title>
+  <style>
+__INLINE_CSS__
+  </style>
+</head>
+<body>
+  <main class="auth-page">
+    <div class="brand">iOS 真机覆盖率 <span>Cycle</span></div>
+    <section class="auth-card" aria-label="平台账号">
+      <form id="login-form">
+        <h1>登录</h1>
+        <p class="muted">登录后提交 MR，查看自己参与的 Cycle。</p>
+        <label for="login-username">用户名</label>
+        <input id="login-username" name="username" required autocomplete="username" autofocus>
+        <label for="login-password">密码</label>
+        <input id="login-password" name="password" type="password" required autocomplete="current-password">
+        <button class="primary" type="submit">登录</button>
+        <p class="switch">还没有账号？<button id="show-register" type="button">注册开发者账号</button></p>
+      </form>
+      <form id="register-form" hidden>
+        <h1>注册开发者账号</h1>
+        <p class="muted">创建账号后将自动登录并进入 Cycle 工作台。</p>
+        <label for="register-username">用户名</label>
+        <input id="register-username" name="username" required autocomplete="username">
+        <label for="register-password">密码（8～128 字符）</label>
+        <input id="register-password" name="password" type="password" required autocomplete="new-password">
+        <button class="primary" type="submit">注册并登录</button>
+        <p class="switch">已有账号？<button id="show-login" type="button">返回登录</button></p>
+      </form>
+      <p id="auth-error" class="error" role="alert" aria-live="polite"></p>
+    </section>
+  </main>
+  <script>
+__INLINE_SCRIPT__
+  </script>
+</body>
+</html>

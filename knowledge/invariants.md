@@ -11,6 +11,8 @@ These rules are ordinary-task stop conditions. A change that needs to violate on
 - Uploads use staging, size/SHA validation, fsync, and atomic publication before success.
 - Existing SQLite schema, triggers, meanings, and runtime paths are not silently migrated or reinterpreted.
 - `project + mr_iid` identifies one Cycle when IID is present; equal IIDs in different projects remain independent.
+- A developer can enumerate or read a Cycle only after that platform account submitted the MR through Web. Multiple submitters share the same Cycle; legacy relation-free Cycles remain admin/operator-only until submission establishes a relation.
+- User creation/status/password reset and Session revocation use short transactions. SQLite stores salted password material and Session SHA-256 only, never plaintext passwords or raw Session Tokens.
 - Build and Run resolve project only through their Cycle.
 
 ## Analysis
@@ -35,7 +37,8 @@ These rules are ordinary-task stop conditions. A change that needs to violate on
 - Online cleanup runs only while the server owns `server.lock`, the analysis worker is paused and idle, and the Cycle/Build/Run mutation guard is held. Queued generations are preserved; a running generation blocks deletion. HTTP serving remains active, and a report read whose stale latest-success generation disappears retries only the newly persisted immutable identity once.
 - Shutdown may cancel cleanup while it waits for analysis or the mutation guard, but cannot interrupt quarantine validation/deletion after that guard is acquired.
 - Production background analysis is isolated in a dedicated process group. Scheduler idle, failure persistence, and cleanup eligibility require proof that this entire group is absent. A termination failure keeps both the durable generation and scheduler owner running, blocks replacement analysis and cleanup, and prevents `server.lock` release. The worker and its controlled Git/LLVM/Xcode descendants inherit the same runtime-lock lease, so an unexpected parent-service exit cannot permit a new server or offline cleanup while analysis remains alive. Coordinated SIGTERM shutdown terminates the group and joins the scheduler within a bounded grace period.
-- Operator, restricted Run upload, and GitLab credentials remain separate.
+- Operator, packaging, restricted Run upload, and GitLab credentials remain pairwise separate; Web users authenticate with independent HttpOnly Sessions.
+- Packaging credentials can only read/update a known Cycle and register/review Builds. They cannot list/create Cycles, manage users, retry analysis, or clean runtime data.
 - Restricted Run credentials can only submit probes and Runs. GitLab credentials are only for registry-matched HTTPS MR GETs.
 - All runtime files derive from one explicit RuntimePaths root; requests cannot override paths, repositories, GitLab addresses, or Bundle allowlists.
 - Tokens, Authorization headers, multipart bodies, and secrets never enter logs, responses, HTML, SQLite, analysis evidence, or documentation.

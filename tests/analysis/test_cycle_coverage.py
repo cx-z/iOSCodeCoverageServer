@@ -145,6 +145,40 @@ class CycleCoverageAnalyzerTests(unittest.TestCase):
             "region_contains_modified_or_added_line",
         )
 
+    def test_foreign_roots_preserve_only_exact_historical_region(self) -> None:
+        """Uses both Builds' fixed Git trees while retaining strict inheritance."""
+
+        source_a = "// base\nlet x = 1\nlet y = 1\n"
+        source_b = "// base\nlet x = 1\nlet y = 2\n"
+        sha_a = self._commit_source("Sources/File.swift", source_a, "build A")
+        sha_b = self._commit_source("Sources/File.swift", source_b, "build B")
+        self._register_build(self.build_a, sha_a, 1)
+        self._register_build(self.build_b, sha_b, 2)
+        old = self._coverage(source_a, [
+            ("Sources/File.swift", 2, 1, 2, 10, 1, "x"),
+            ("Sources/File.swift", 3, 1, 3, 10, 1, "y"),
+        ])
+        new = self._coverage(source_b, [
+            ("Sources/File.swift", 2, 1, 2, 10, 0, "x"),
+            ("Sources/File.swift", 3, 1, 3, 10, 0, "y"),
+        ])
+        for payload, root in ((old, "/builder/old/repository"),
+                              (new, "/builder/new/repository")):
+            for file_record in payload["data"][0]["files"]:
+                file_record["filename"] = root + "/Sources/File.swift"
+            for function in payload["data"][0]["functions"]:
+                function["filenames"] = [root + "/Sources/File.swift"]
+        self._single_result(self.build_a, self.input_a, sha_a, old)
+        self._single_result(self.build_b, self.input_b, sha_b, new)
+
+        result = self._analyze(self.build_b, {self.build_a: self.input_a, self.build_b: self.input_b})
+        lines = {line["new_line_number"]: line for line in self._lines(result.output_directory)}
+        self.assertEqual(lines[2]["state"], "covered")
+        self.assertEqual(lines[2]["regions"][0]["source"]["kind"], "inherited_build")
+        self.assertEqual(lines[3]["state"], "uncovered")
+        self.assertEqual(lines[3]["regions"][0]["inheritance_attempts"][0]["reason"],
+                         "region_contains_modified_or_added_line")
+
     def test_current_positive_region_wins_without_history_downgrade(self) -> None:
         """Uses current positive evidence even when the historical count is zero."""
 

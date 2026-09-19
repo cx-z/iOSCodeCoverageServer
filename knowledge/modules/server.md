@@ -2,7 +2,7 @@
 
 ## Responsibility
 
-Assemble dependencies, own HTTP/scheduler lifecycle, match stable routes, enforce Token scope with an optional anonymous read-only bypass for the fixed extension report/resolver routes, parse bounded requests, convert domain errors, and write structured diagnostics.
+Assemble dependencies, own HTTP/scheduler lifecycle, match stable routes, resolve immutable principals from Bearer or HttpOnly Session credentials, enforce role/scope with an optional anonymous read-only bypass for the fixed extension report/resolver routes, parse bounded requests, convert domain errors, and write structured diagnostics.
 
 ## Non-responsibility
 
@@ -13,11 +13,12 @@ No SQL, artifact persistence, LLVM, Git diff, cumulative mapping, page business-
 - `ioscoverage/server/deployment.py`: strict source-side `config/server.json` loader; it owns the runtime-root pointer and the `anonymous_read` flag.
 - `ioscoverage/server/bootstrap.py`: `RuntimePaths`/ProjectRegistry dependency assembly, option parsing, `create_server`, `main`.
 - `ioscoverage/server/mr_coverage_resolver.py`: read-only GitLab MR/Cycle/state/report/Build identity orchestration and exact three-SHA annotation decision.
-- `ioscoverage/server/config.py`: `ProbeConfig` (including `anonymous_read`), deployment options, and protocol limits.
+- `ioscoverage/server/config.py`: `ProbeConfig` (including `anonymous_read`, AccountStore, and packaging Token), deployment options, and protocol limits.
 - `ioscoverage/server/http/server.py`: `ProbeHTTPServer`, analysis-worker, and cleanup-worker lifecycle.
 - `ioscoverage/server/http/router.py`: `ProbeRequestHandler` and route matching.
-- `auth.py`, `request.py`, `multipart.py`, `response.py`, `errors.py`, `request_logging.py`: cross-route HTTP concerns. `auth.py` exposes `_authorize_read`: when `anonymous_read` is enabled it lets the fixed read-only extension routes through without a credential; otherwise it falls back to `_require_token`.
-- `http/routes/`: resource-specific handlers, including operator-only maintenance status/trigger conversion.
+- `auth.py`, `request.py`, `multipart.py`, `response.py`, `errors.py`, `request_logging.py`: cross-route HTTP concerns. `auth.py` resolves anonymous/operator/packaging/run_upload/web_user principals; an invalid Bearer never falls back to Cookie. `_authorize_read` keeps the fixed extension routes anonymous only when configured.
+- `http/routes/`: resource-specific handlers, including account/admin routes and admin/operator maintenance conversion.
+- `http/routes/pages.py`: keeps `/login/` and `/cycles/` as data-free shells, with Session-aware temporary redirects between authentication and workbench; machine Bearer credentials never open the workbench.
 - `http/routes/integrations.py`: strict read-only MR resolver protocol conversion.
 - `ioscoverage/server/logging.py`: redacted JSON-line logging.
 
@@ -29,4 +30,4 @@ SIGTERM and Control-C enter the same coordinated server shutdown: stop cleanup, 
 
 ## Common changes and tests
 
-Change routing only in `router.py`; resource protocol conversion in the matching route file; authentication and the anonymous-read bypass in `auth.py` (`_authorize_read` on the resolver/report/file routes); parsing/limits in request/multipart; lifecycle in server/bootstrap. The MR resolver owns cross-read status precedence but delegates GitLab, SQLite, state, report integrity, and Build reads to their existing owners. Run `tests/server/`, `tests/web/test_report_ui.py`, and `tests/test_architecture.py`.
+Change routing only in `router.py`; page Session decisions in `routes/pages.py`; resource protocol conversion in the matching route file; principal resolution, Session same-origin checks, and anonymous-read bypass in `auth.py`; parsing/limits in request/multipart; lifecycle in server/bootstrap. Browser writes use Session plus exact Origin/Host. The MR resolver owns cross-read status precedence but delegates GitLab, SQLite, state, report integrity, and Build reads to their existing owners. Run `tests/server/`, `tests/web/`, and `tests/test_architecture.py`.

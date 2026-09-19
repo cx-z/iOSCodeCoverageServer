@@ -28,7 +28,7 @@ from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore
 
 
 ORCHESTRATION_SCHEMA_VERSION = 1
-ORCHESTRATOR_VERSION = "cycle-latest/1"
+ORCHESTRATOR_VERSION = "cycle-latest/2"
 
 
 class CycleAnalysisOrchestrationError(Exception):

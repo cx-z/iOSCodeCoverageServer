@@ -65,7 +65,16 @@ class ResponseMixin:
         self._send_response(
             HTTPStatus.PERMANENT_REDIRECT,
             "text/plain; charset=utf-8",
-            b"Redirecting to /cycles/\n",
+            f"Redirecting to {location}\n".encode("ascii"),
+            {"Location": location},
+        )
+    def _send_temporary_redirect(self, location: str) -> None:
+        """Redirects a browser after a Session-dependent page decision."""
+
+        self._send_response(
+            HTTPStatus.FOUND,
+            "text/plain; charset=utf-8",
+            b"Redirecting\n",
             {"Location": location},
         )
     def _send_response(

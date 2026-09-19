@@ -19,7 +19,7 @@ The server receives immutable iOS Build artifacts and user-triggered `.profraw` 
 ## Data flow
 
 ```text
-MR URL -> GitLab read-only MR lookup -> Cycle
+platform Session -> MR URL -> GitLab read-only MR lookup -> shared Cycle + submitter relation
 packaging Mac -> Build manifest + Mach-O/dSYM -> storage
 iPhone user upload -> Run metadata + profraw -> storage -> scheduler
 scheduler -> process-isolated Cycle orchestrator
@@ -27,7 +27,7 @@ scheduler -> process-isolated Cycle orchestrator
   -> current fixed Git diff
   -> cross-Build source-region accumulation
   -> immutable analysis result
-browser -> protected report API -> latest successful result
+browser -> Session-scoped Cycle APIs / anonymous-read report APIs -> latest successful result
 ```
 
 ## Top-level modules
@@ -47,9 +47,10 @@ See [architecture](architecture.md) for allowed dependencies and [invariants](in
 ## Daily entry points
 
 - Start/diagnose service: configure `config/server.json`, then run `./start_coverage_server.sh`; use `python3 server.py --help` for options
-- Cycle list and report: `/cycles/`
+- Account login/registration: `/login/`; authenticated Cycle workbench: `/cycles/`; report: `/cycles/<cycle_id>`; admin account management: `/admin/users/`
+- Initial admin: `python3 manage_users.py create-admin --username <name>` while the service is stopped
 - Diagnostic analysis only: the four root `analyze_*.py` compatibility commands
-- Runtime cleanup: automatic at startup and every 24 hours; operator POST `/api/v1/maintenance/cleanup`; offline CLI remains dry-run by default
+- Runtime cleanup: automatic at startup and every 24 hours; admin Session or operator POST `/api/v1/maintenance/cleanup`; offline CLI remains dry-run by default
 - User workflow: `docs/daily_workflow.md`
 - HTTP contract: `docs/api.md`
 
