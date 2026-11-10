@@ -16,6 +16,7 @@ from ioscoverage.lifecycle.runtime_lock import RuntimeLockError, RuntimeProcessL
 from ioscoverage.lifecycle.secure_delete import SecureDeletionError, SecureRuntimeDeletion
 from ioscoverage.runtime import RuntimePaths
 from ioscoverage.storage.analysis_state import AnalysisStateStore
+from ioscoverage.storage.build_evidence import BuildEvidenceStore
 from ioscoverage.storage.reports import CoverageReportStore
 from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore, RetainedEvidenceError
 from ioscoverage.cli.cleanup_runtime_data import build_parser
@@ -272,6 +273,35 @@ class RuntimeDataCleanerTests(unittest.TestCase):
 
     def tearDown(self):
         self.fixture.close()
+
+    def test_independent_mr_result_is_retained_without_authorizing_extra_compaction(self):
+        """Cleanup cannot orphan a successful old-package result outside formal success."""
+        fixture = self.fixture
+        independent_sha = "a" * 64
+        independent = fixture.paths.analysis_dir / "single-build" / fixture.build_id / independent_sha
+        shutil.copytree(fixture.single_dir, independent)
+        for name in ("inputs.json", "summary.json"):
+            payload = json.loads((independent / name).read_text())
+            payload["input_set_sha256"] = independent_sha
+            fixture._write_json(independent / name, payload)
+        fixture._complete(independent, "completion.json", "input_set_sha256", independent_sha)
+        store = BuildEvidenceStore(fixture.paths.analysis_dir)
+        reference = store.publish(fixture.cycle_id, fixture.build_id, independent)
+        before = (fixture.cycle_dir / "summary.json").read_bytes()
+        result = RuntimeDataCleaner(fixture.paths).run(apply=True)
+        self.assertTrue(independent.is_dir())
+        self.assertEqual(store.load(reference)[1]["inputs"]["input_set_sha256"], independent_sha)
+        self.assertEqual((fixture.cycle_dir / "summary.json").read_bytes(), before)
+        self.assertFalse(any(item["path"] == str(independent) for item in result.get("deleted", [])))
+
+    def test_corrupt_independent_reference_prevents_unsafe_build_cleanup(self):
+        """An unproven MR pointer cannot make its source generation eligible for deletion."""
+        fixture = self.fixture
+        root = fixture.paths.analysis_dir / "build-evidence" / fixture.cycle_id
+        root.mkdir(parents=True)
+        (root / (fixture.build_id + ".json")).write_text("invalid")
+        result = RuntimeDataCleaner(fixture.paths).run()
+        self.assertTrue(any(item.get("reason") == "independent_evidence_unproven" for item in result["skipped"]))
 
     def test_dry_run_is_byte_read_only_and_reports_categories(self):
         before = self.fixture.tree_identity()

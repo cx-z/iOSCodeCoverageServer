@@ -16,6 +16,7 @@ No HTTP status selection, browser rendering, LLVM/Git analysis, or GitLab networ
 - `database.py`: connection/transaction context; `schema.py`: schema v4, existing triggers, account/session/submission tables, and transactional v3→v4 migration.
 - `artifact_files.py`: staging, hashing, fsync, atomic paths; `validation.py` and `common.py`: stable field/error rules.
 - `analysis_state.py`: `AnalysisStateStore` generation state machine.
+- `build_evidence.py`: scheduler-owned atomic pointers to completed independent Build analysis, separate from formal Cycle success and from cleanup authorization.
 - `reports.py`: `CoverageReportStore` safe latest-success projection.
 - `retained_evidence.py`: validates and durably publishes Cycle/Build-scoped compaction evidence tied to immutable single-Build results; existing evidence is re-fsynced before reuse and obsolete proven records are cleanup candidates.
 - `tokens.py`: `TokenStore` atomic persistent operator, packaging, run_upload, and GitLab credentials.

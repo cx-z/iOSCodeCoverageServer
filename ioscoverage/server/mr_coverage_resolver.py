@@ -1,6 +1,15 @@
 """Read-only GitLab MR, Cycle, Build, and report identity resolver."""
 
 import re
+import hashlib
+import json
+import threading
+import time
+import copy
+from concurrent.futures import Future
+from collections import OrderedDict
+
+from ioscoverage.analysis.mr_presentation import MergeRequestPresentation, LOCAL_ERRORS
 from typing import Dict, Mapping, Optional
 
 from ioscoverage.integrations.gitlab_mr import (
@@ -45,6 +54,12 @@ class MergeRequestCoverageResolver:
         self.coverage_store = coverage_store
         self.analysis_state_store = analysis_state_store
         self.report_store = report_store
+        # Cache owns immutable derived snapshots, not mutable Build/Run or Git state.
+        self._presentations = OrderedDict()
+        self._presentation_inputs = {}
+        self._projection_pending = {}
+        self._presentation_lock = threading.Lock()
+        self._projection_slots = threading.BoundedSemaphore(2)
 
     def resolve(self, mr_url: object) -> Dict[str, object]:
         """Resolves one registered MR to a completion-verified annotation decision."""
@@ -135,6 +150,118 @@ class MergeRequestCoverageResolver:
             analysis,
             report_document,
         )
+
+    def resolve_presentation(self, mr_url, page_version, presentation_id=None, file_id=None):
+        """Negotiates schema 2; schema 1 retains its original strict-SHA behavior."""
+
+        normalized = normalize_mr_url(mr_url, self.gitlab_client.project_registry)
+        if not isinstance(page_version, str) or re.fullmatch(r"[1-9][0-9]{0,18}", page_version) is None:
+            raise CoverageReportError("page_version_unverified", "Page diff version cannot be verified")
+        scope = (normalized.project.project, str(normalized.iid), page_version)
+        if file_id is not None:
+            with self._presentation_lock:
+                cached = self._presentations.get(presentation_id)
+            if cached is None or cached[0] != scope or file_id not in cached[1]["details"]:
+                raise CoverageReportError("presentation_expired", "MR presentation must be refreshed")
+            snapshot = cached[1]
+            return {"schema_version": 2, "presentation_id": presentation_id, "page_version": page_version,
+                    "cycle_id": snapshot["cycle_id"], "mr_iid": scope[1], "generation": snapshot["generation"],
+                    **copy.deepcopy(snapshot["details"][file_id])}
+        result = self.resolve(mr_url)
+        result["schema_version"] = 2
+        result["page_version"] = page_version
+        result["presentation_id"] = None
+        result["projection"] = None
+        if result["report"] is None:
+            return result
+        page_diff = self.gitlab_client.fetch_version_refs(mr_url, page_version)
+        if page_diff != result["mr"]["diff"]:
+            result.update(status="page_version_unverified", can_annotate=False)
+            return result
+        cycle_id = result["cycle"]["id"]
+        report = self.report_store.get_report(cycle_id)
+        reference = result["report"]
+        if any(report.get(field) != reference.get(field) for field in ("generation", "current_build_id", "updated_at")):
+            raise CoverageReportError("report_identity_mismatch", "Report changed during MR resolution")
+        independent = self.report_store.get_mr_evidence_references(cycle_id, report)
+        identity = {"version": "mr-lines/4", "scope": scope, "cycle_id": cycle_id, "diff": page_diff,
+                    "generation": report["generation"], "build_id": report["current_build_id"],
+                    "orchestration": report["orchestration_input_sha256"], "inputs": report["cycle_input_set_sha256"],
+                    "independent_evidence": independent}
+        key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        def create_snapshot():
+            """Computes a request-confined projection outside cache locks."""
+
+            strict = page_diff == reference["build_diff"] and not independent
+            if strict:
+                snapshot = self.report_store.get_mr_report_snapshot(cycle_id, report)
+            else:
+                definition = normalized.project
+                repository = self.gitlab_client.project_registry.repository(definition.project)
+                evidence = self.report_store.get_mr_evidence(cycle_id, report, independent)
+                try:
+                    snapshot = MergeRequestPresentation(repository, definition, self.coverage_store).project(
+                        cycle_id, page_diff, evidence, {"build_id": report["current_build_id"],
+                            **self.report_store.get_mr_report_snapshot(cycle_id, report)})
+                except LOCAL_ERRORS as error:
+                    raise CoverageReportError("mr_data_unavailable", "Current MR Git data is unavailable") from error
+            snapshot = {**snapshot, "cycle_id": cycle_id, "generation": report["generation"], "strict_match": strict}
+            return snapshot
+
+        presentation_id, snapshot = self._cached_presentation(key, scope, create_snapshot)
+        # No identity is inferred from generation alone, including base/start-only changes.
+        result["presentation_id"] = presentation_id
+        result["projection"] = copy.deepcopy({field: snapshot[field] for field in ("files", "summary", "strict_match")})
+        result["can_annotate"] = True
+        result["should_poll"] = True
+        analysis_status = result["analysis"]["status"]
+        result["status"] = "analysis_pending" if analysis_status in PENDING_ANALYSIS_STATUSES else (
+            "analysis_failed" if analysis_status == "failed" else "ready")
+        return result
+
+    def _cached_presentation(self, input_key, scope, create_snapshot):
+        """Single-flights input computation; issued IDs permanently bind actual contents.
+
+        Transiently degraded entries are retried after a bounded interval. An old
+        issued ID still reads its original immutable details during recovery.
+        """
+
+        with self._presentation_lock:
+            current = self._presentation_inputs.get(input_key)
+            if current is not None:
+                issued_id, retry_at = current
+                cached = self._presentations.get(issued_id)
+                if cached is not None and (retry_at is None or time.monotonic() < retry_at):
+                    return issued_id, cached[1]
+            pending = self._projection_pending.get(input_key)
+            owner = pending is None
+            if owner:
+                pending = Future()
+                self._projection_pending[input_key] = pending
+        if not owner:
+            return pending.result()
+        try:
+            with self._projection_slots:
+                snapshot = create_snapshot()
+                encoded = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+                snapshot = json.loads(encoded)
+                issued_id = hashlib.sha256((input_key + ":" + encoded).encode()).hexdigest()
+            with self._presentation_lock:
+                self._presentations.setdefault(issued_id, (scope, snapshot))
+                retry_at = time.monotonic() + 15 if snapshot.get("retryable") else None
+                self._presentation_inputs[input_key] = (issued_id, retry_at)
+                while len(self._presentations) > 8:
+                    removed_id, _ = self._presentations.popitem(last=False)
+                    self._presentation_inputs = {key: value for key, value in self._presentation_inputs.items()
+                                                 if value[0] != removed_id}
+            pending.set_result((issued_id, snapshot))
+            return issued_id, snapshot
+        except BaseException as error:
+            pending.set_exception(error)
+            raise
+        finally:
+            with self._presentation_lock:
+                self._projection_pending.pop(input_key, None)
 
     def _validated_build_diff(
         self, cycle_id: str, build: Mapping[str, object]

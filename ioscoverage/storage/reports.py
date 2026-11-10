@@ -8,6 +8,8 @@ import uuid
 from pathlib import Path, PurePosixPath
 from typing import Dict, List, Mapping, Tuple
 
+from ioscoverage.storage.build_evidence import BuildEvidenceStore
+from ioscoverage.storage.retained_evidence import RetainedEvidenceError
 from ioscoverage.storage.analysis_state import AnalysisStateStore, AnalysisStateStoreError
 
 
@@ -73,6 +75,120 @@ class CoverageReportStore:
             },
             "files": report["files"],
         }
+
+    def get_mr_report_snapshot(self, cycle_id: str, expected: Mapping[str, object]):
+        """Projects all strict-path lines in one validated immutable read for MR display."""
+
+        loaded = self._load_latest(cycle_id)
+        for field in ("generation", "current_build_id", "orchestration_input_sha256", "cycle_input_set_sha256"):
+            if loaded.get(field) != expected.get(field):
+                raise CoverageReportError("report_identity_mismatch", "Report changed during MR projection")
+        details = {}
+        for file in loaded["files"]:
+            details[file["file_id"]] = {"file": file, "lines": []}
+        for line in loaded["changed_lines"]:
+            file_id = hashlib.sha256(line["repo_relative_path"].encode("utf-8")).hexdigest()
+            details[file_id]["lines"].append(self._line_document(line))
+        return {"files": loaded["files"], "summary": expected["summary"], "details": details}
+
+    def get_mr_evidence_references(self, cycle_id, report):
+        """Returns independent evidence not already incorporated by the formal report."""
+
+        cycle_id = self._normalize_uuid(cycle_id)
+        store = BuildEvidenceStore(self.analysis_root)
+        try:
+            references = store.references(cycle_id)
+        except (OSError, ValueError) as error:
+            raise CoverageReportError("report_result_invalid", "Independent evidence identity is unavailable") from error
+        if not references:
+            return []
+        directory = self.orchestration_root / cycle_id / report["orchestration_input_sha256"]
+        self._validate_result_directory(directory, "complete.json", "orchestration_input_sha256", report["orchestration_input_sha256"])
+        formal = self._load_json(directory / "results.json").get("single_build_results", [])
+        formal_by_build = {item["build_id"]: item for item in formal}
+        selected = []
+        for reference in references:
+            incorporated = formal_by_build.get(reference["build_id"])
+            try:
+                if incorporated is not None:
+                    if incorporated["input_set_sha256"] == reference.get("input_set_sha256"):
+                        continue
+                    single = self.analysis_root / "single-build" / incorporated["build_id"] / incorporated["input_set_sha256"]
+                    self._validate_reference(incorporated, single, "completion.json")
+                    completion = self._load_json(single / "completion.json")
+                    if self._file_identity(single / "inputs.json") != (
+                            completion["outputs"]["inputs.json"]["size"], completion["outputs"]["inputs.json"]["sha256"]):
+                        raise ValueError("formal inputs changed")
+                    inputs = self._load_json(single / "inputs.json")
+                    older = store.inputs(reference)
+                    current_runs = {item["run_id"]: item for item in inputs["runs"]}
+                    if (inputs.get("cycle_id") == cycle_id and inputs.get("build_id") == reference["build_id"] and
+                            inputs.get("input_set_sha256") == incorporated["input_set_sha256"] and
+                            all(current_runs.get(item["run_id"]) == item for item in older["runs"])):
+                        continue
+            except (CoverageReportError, OSError, ValueError, KeyError, TypeError):
+                pass  # Keep the independent reference; full validation happens at projection time.
+            selected.append(reference)
+        return selected
+
+    def get_mr_evidence(self, cycle_id: str, report: Mapping[str, object], independent_references=()):
+        """Loads completion-bound independent exports; unavailable entries stay local failures.
+
+        The orchestration is revalidated against the exact supplied report pointer.
+        Returned payloads remain internal and never appear in a public response.
+        """
+
+        cycle_id = self._normalize_uuid(cycle_id)
+        orchestration_sha = report.get("orchestration_input_sha256")
+        if not self._is_sha256(orchestration_sha):
+            raise CoverageReportError("report_identity_mismatch", "Report evidence identity is invalid")
+        directory = self.orchestration_root / cycle_id / orchestration_sha
+        self._validate_result_directory(directory, "complete.json", "orchestration_input_sha256", orchestration_sha)
+        references = self._load_json(directory / "results.json").get("single_build_results")
+        if not isinstance(references, list) or not references:
+            raise CoverageReportError("report_result_invalid", "Report evidence references are invalid")
+        evidence = []
+        seen = set()
+        for reference in references:
+            if not isinstance(reference, dict):
+                raise CoverageReportError("report_result_invalid", "Report evidence reference is invalid")
+            build_id, input_sha = reference.get("build_id"), reference.get("input_set_sha256")
+            if not self._is_uuid(build_id) or not self._is_sha256(input_sha) or build_id in seen:
+                raise CoverageReportError("report_identity_mismatch", "Report Build evidence identity is invalid")
+            seen.add(build_id)
+            item = {"build_id": build_id, "input_set_sha256": input_sha, "payload": None}
+            try:
+                single = self.analysis_root / "single-build" / build_id / input_sha
+                if Path(str(reference.get("output_directory"))).resolve() != single:
+                    raise CoverageReportError("report_path_invalid", "Build evidence path is invalid")
+                self._validate_reference(reference, single, "completion.json")
+                self._validate_result_directory(single, "completion.json", "input_set_sha256", input_sha)
+                inputs = self._load_json(single / "inputs.json")
+                summary = self._load_json(single / "summary.json")
+                if (summary.get("build_id") != build_id or summary.get("cycle_id") != cycle_id or
+                        inputs.get("build_id") != build_id or inputs.get("cycle_id") != cycle_id or
+                        inputs.get("input_set_sha256") != input_sha):
+                    raise CoverageReportError("report_identity_mismatch", "Build evidence ownership is invalid")
+                item["payload"] = self._load_json(single / "llvm-cov-export.json")
+                item["inputs"] = inputs
+                item["updated_at"] = summary.get("completed_at")
+                item["export_sha256"] = self._file_identity(single / "llvm-cov-export.json")[1]
+            except CoverageReportError:
+                item["error"] = "evidence_unavailable"
+            evidence.append(item)
+        store = BuildEvidenceStore(self.analysis_root)
+        for reference in independent_references:
+            item = {"build_id": reference["build_id"], "input_set_sha256": reference.get("input_set_sha256"), "payload": None}
+            try:
+                single, validated = store.load(reference)
+                item["inputs"] = validated["inputs"]
+                item["updated_at"] = validated["completion"].get("completed_at")
+                item["payload"] = self._load_json(single / "llvm-cov-export.json")
+                item["export_sha256"] = self._file_identity(single / "llvm-cov-export.json")[1]
+            except (CoverageReportError, RetainedEvidenceError, OSError, ValueError, KeyError):
+                item["error"] = "evidence_unavailable"
+            evidence.append(item)
+        return evidence
 
     def get_file(self, cycle_id: str, file_id: str) -> Dict[str, object]:
         """Returns changed lines for one server-issued file identity, never a path input."""
@@ -344,10 +460,10 @@ class CoverageReportStore:
             if size != descriptor.get("size") or digest != descriptor.get("sha256"):
                 raise CoverageReportError("report_completion_invalid", "Coverage output changed")
 
-    def _validate_reference(self, reference: Mapping[str, object], directory: Path) -> None:
+    def _validate_reference(self, reference: Mapping[str, object], directory: Path, completion_name: str = "complete.json") -> None:
         """Checks the orchestration pointer to the cumulative completion and summary."""
 
-        for key, filename in (("completion", "complete.json"), ("summary", "summary.json")):
+        for key, filename in (("completion", completion_name), ("summary", "summary.json")):
             descriptor = reference.get(key)
             if not isinstance(descriptor, dict):
                 raise CoverageReportError("report_result_invalid", "Cycle reference is invalid")

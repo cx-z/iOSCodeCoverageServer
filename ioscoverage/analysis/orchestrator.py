@@ -24,7 +24,8 @@ from ioscoverage.analysis.diff.analyzer import (
     SingleBuildDiffAnalysisError,
     SingleBuildDiffAnalyzer,
 )
-from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore
+from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore, RetainedEvidenceError
+from ioscoverage.storage.build_evidence import BuildEvidenceStore
 
 
 ORCHESTRATION_SCHEMA_VERSION = 1
@@ -73,6 +74,7 @@ class CycleAnalysisOrchestrator:
         self.cycle_analyzer = cycle_analyzer or CycleCoverageAnalyzer(configuration)
         self.snapshot_observer = snapshot_observer
         self.analysis_root = configuration.analysis_root.parent / "cycle-latest"
+        self.build_evidence_store = BuildEvidenceStore(configuration.analysis_root.parent)
         self.retained_evidence_store = RetainedBuildEvidenceStore(
             configuration.analysis_root.parent
         )
@@ -91,7 +93,12 @@ class CycleAnalysisOrchestrator:
                 self.snapshot_observer(snapshot)
 
             stage = "build_selection"
-            selection = self._select_inputs(snapshot)
+            try:
+                selection = self._select_inputs(snapshot)
+            except CycleAnalysisOrchestrationError as error:
+                if error.code in ("current_build_not_found", "current_build_has_no_analyzable_runs"):
+                    self._publish_independent_evidence(snapshot, staging_dir)
+                raise
 
             stage = "run_validation"
             self._validate_selected_files(selection)
@@ -265,6 +272,33 @@ class CycleAnalysisOrchestrator:
             ) from error
         finally:
             connection.close()
+
+    def _publish_independent_evidence(self, snapshot, staging_dir):
+        """Refreshes eligible Builds despite a missing/untested current formal Build.
+
+        Formal selection still fails with its existing code and retains the old
+        report. Successful independent results are available to the read-only MR
+        projection; one invalid Build does not suppress the others.
+        """
+
+        records = []
+        for build in sorted(snapshot["builds"], key=lambda item: (str(item["created_at"]), str(item["id"]))):
+            if build["artifact_state"] != "ready":
+                continue
+            runs = sorted((run for run in snapshot["runs"] if run["build_id"] == build["id"] and
+                           run["cycle_id"] == build["cycle_id"] and self._run_is_analyzable(run)),
+                          key=lambda item: str(item["id"]))
+            if not runs:
+                continue
+            try:
+                self._validate_selected_files({"selected_builds": [{"build": build, "runs": runs}]})
+                result = self.single_build_analyzer.analyze(str(build["cycle_id"]), str(build["id"]),
+                                                           [str(run["id"]) for run in runs])
+                reference = self.build_evidence_store.publish(str(build["cycle_id"]), str(build["id"]), result.output_directory)
+                records.append({"build_id": build["id"], "input_set_sha256": reference["input_set_sha256"], "status": "complete"})
+            except (SingleBuildAnalysisError, CycleAnalysisOrchestrationError, RetainedEvidenceError, ValueError, OSError) as error:
+                records.append({"build_id": build["id"], "status": "failed", "error": getattr(error, "code", "evidence_publication_failed")})
+        self._write_json(staging_dir / "independent-builds.json", {"schema_version": 1, "builds": records})
 
     def _select_inputs(self, snapshot: Mapping[str, object]) -> Dict[str, object]:
         """Selects the current Build and all eligible historical Builds deterministically."""

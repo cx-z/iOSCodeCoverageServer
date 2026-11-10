@@ -58,9 +58,9 @@ class ErrorResponseMixin:
 
         if error.code in ("cycle_not_found", "report_file_not_found"):
             status = HTTPStatus.NOT_FOUND
-        elif error.code in ("invalid_uuid",):
+        elif error.code in ("invalid_uuid", "page_version_unverified"):
             status = HTTPStatus.BAD_REQUEST
-        elif error.code == "report_not_available":
+        elif error.code in ("report_not_available", "presentation_expired"):
             status = HTTPStatus.CONFLICT
         else:
             status = HTTPStatus.INTERNAL_SERVER_ERROR

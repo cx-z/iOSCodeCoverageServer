@@ -452,6 +452,26 @@ GET /api/v1/cycles/<cycle_id>/report/files/<file_id>
 
 浏览器扩展将一个已注册项目的 MR 页面 URL 解析为当前 GitLab diff 与 latest success 报告之间的可信关系。该接口只读：默认要求任一有效平台身份；`anonymous_read: true` 时在可信内网放行无 Token 访问（GitLab MR 扩展零配置场景）：
 
+### MR 展示协议 schema 2
+
+可执行验收入口与 P01～P20 测试映射见 [MR 展示验证](mr_presentation_validation.md)。
+
+同一个只读 resolver POST 支持显式 `schema_version: 2`，请求摘要时必须恰好包含 `schema_version`、`mr_url`、`page_version`。`page_version` 是页面激活 latest diff 链接中的十进制 `diff_id` 字符串（1～19 位），不是客户端提供的 SHA。服务端只读查询注册项目 MR 的 `versions?per_page=1`，验证该 ID 及其 base/start/head 与当前 MR 一致。旧页面或历史 diff 不可套用最新结果。
+
+响应保留下面 schema-1 文档中的 `mr/cycle/analysis/report` 来源信息，但 `schema_version` 为 2，另有 `page_version`、`presentation_id` 和 `projection`。`report` 始终描述正式构建报告；实际 MR 数量与文件列表来自 `projection: {strict_match, summary, files}`。无报告时两项新结果为 null；版本不符返回 `page_version_unverified`、`can_annotate:false`、空投影。必要 Git 数据失败返回有界错误，不伪造全红。单文件或部分证据异常降级为对应未知，其他完整命中仍可用。
+
+`strict_match:true` 表示直接使用正式报告结果与百分比；三 SHA 相同但有尚未纳入正式报告的独立证据时，也会返回 `strict_match:false` 的 MR 投影。投影时 `summary` 提供 `changed_new_side/covered/uncovered/not_measurable/unknown` 分类数量，`changed_line_coverage_percent:null`，兼容形状中的 `measurable:0` 不是当前 MR 的编译分母。`files` 使用精确 `repo_relative_path`、SHA-256 `file_id` 和同口径分类数量。旧报告百分比不得作为 MR 百分比展示。
+
+详情请求在同一摘要请求的三个字段外增加 `presentation_id` 和 `file_id`，两者均为服务端签发的 64 位小写十六进制身份。详情响应为 `{schema_version:2, presentation_id, page_version, cycle_id, mr_iid, generation, file, lines}`。行含 `new_line_number/state/coverage_source/regions`，绿色可附 `evidence:{build_id,git_sha,input_set_sha256,export_sha256,reported_at?}`（可用时提供来源分析的报告时间，独立证据不冒用旧正式报告时间）；红色统一未覆盖。同一逻辑输入只执行一份并发计算，签发的 presentation ID 同时绑定完整结果内容。瞬时数据故障在 15 秒后可重算，恢复后的不同内容使用新 ID，旧 ID 的摘要/详情保持一致。缓存最多保留八份不可变投影，失效返回 HTTP 409 `presentation_expired`，客户端须重新解析，不能退回旧行号。
+
+身份包含目标完整三 SHA、页面版本、注册项目/MR/Cycle、正式报告 generation、Build、orchestration、input-set hash 和尚未纳入正式报告的独立 Build 证据引用。缺失或未测试当前 Build 时，后台仍可发布旧 Build 的成功独立分析引用；此时正式分析保持失败及旧成功报告，MR 可使用新引用更新适用行。客户端还须对照实际行 `data-position` 的三 SHA、路径和新侧行号；不能仅相信服务器最新版本或相同 generation。异步授权、详情缓存和渲染必须使用 presentation ID。
+
+schema 2 直接验证收到的状态组合：关闭/不存在 MR、无报告或版本无法确认的状态不能授权标注；pending/failed 元数据与状态必须一致，有有效证据时仍可标注并继续轮询。
+
+schema 1 的请求、严格匹配和 `stale_diff` 行为保持不变。新扩展发送 schema 2；旧服务拒绝时失败关闭，不降级套用旧报告。旧扩展的 schema-1 严格校验继续有效。正式 `/report`、`/report/files/…` 和 Cycle 页面接口语义不变。
+
+### 兼容 MR resolver schema 1
+
 ```text
 POST /api/v1/integrations/gitlab/merge-request-coverage/resolve
 Content-Type: application/json

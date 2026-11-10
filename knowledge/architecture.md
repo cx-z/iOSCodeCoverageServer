@@ -45,7 +45,7 @@ ioscoverage/
 
 - `server.bootstrap` composes configuration, storage, integrations, scheduler, report store, and HTTP server.
 - `server.http` converts requests and responses. It may call storage facades, the scheduler, fixed integration clients, and web renderers; it does not implement SQL, LLVM, or Git algorithms.
-- `server.mr_coverage_resolver` is a read-only application service that combines one registry-bounded GitLab MR, an existing Cycle, analysis state, a completion-verified report, and its immutable current Build. It never calls mutation or scheduling APIs.
+- `server.mr_coverage_resolver` is a read-only application service that combines one registry-bounded GitLab MR, an existing Cycle, analysis state, a completion-verified report, and its immutable current Build. It never calls mutation or scheduling APIs. Its schema-2 path owns bounded immutable presentation caching and calls `analysis.mr_presentation` for fixed-object display mapping; formal report storage and analyzers retain their existing semantics.
 - `web` accepts already projected values and trusted internal template names. It must not depend on SQLite, TokenStore, Build artifacts, Runs, or arbitrary paths.
 - `storage.coverage_store` is the stable facade over Cycle/Build/Run mixins; `storage.accounts.AccountStore` independently owns users and Sessions. HTTP code never opens SQLite directly.
 - `analysis` reads immutable database/file identities and fixed Git objects. The scheduler invokes the orchestrator, which reuses the single-Build, diff, and cumulative analyzers.
@@ -74,3 +74,5 @@ The following live only below the explicit runtime root and must never be derive
 `config/server.json` only selects the root; `RuntimePaths` remains the only mutable path authority. Repository selection is `Cycle.project -> ProjectRegistry -> ProjectDefinition -> GitRepository`; diagnostic CLIs accept runtime root and immutable identities, never a repository path.
 
 Real project identities, repository paths, credentials, uploads, databases, logs, and analysis output belong exclusively to the external runtime root. Public source, examples, tests, and knowledge documents use fictional identities. The anchored ignore policy protects accidental root-local runtime copies without hiding `ioscoverage/analysis/` source.
+
+`storage.build_evidence.BuildEvidenceStore` owns the small atomic per-Build pointers published by background orchestration when formal current-Build selection cannot succeed. MR report readers consume those fixed references without mutation, and lifecycle cleanup validates/protects their source outputs. No new SQLite schema, profile merge scope or formal report success semantics are introduced.

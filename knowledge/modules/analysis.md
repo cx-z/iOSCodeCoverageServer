@@ -14,8 +14,9 @@ No HTTP parsing, Run upload, schema migration, Token handling, Git checkout/work
 - `diff/analyzer.py`: `SingleBuildDiffAnalyzer`; `diff/git_diff_parser.py`: NUL status and zero-context patch parsing.
 - `cumulative/analyzer.py`: `CycleCoverageAnalyzer` and historical hit selection.
 - `mapping/coverage_export.py`: llvm-cov region normalization.
-- `mapping/source_region.py`: exact Git line/range inheritance evidence.
-- `orchestrator.py`: `CycleAnalysisOrchestrator` snapshot selection and stage coordination.
+- `mapping/source_region.py`: exact Git line/range inheritance evidence for formal reports.
+- `mr_presentation.py`, `mapping/mr_lines.py`: read-only current-MR display mapping, separate from formal region inheritance; see `workflows/coverage_report.md`.
+- `orchestrator.py`: `CycleAnalysisOrchestrator` snapshot selection and stage coordination; missing/untested-current selection also refreshes independent Build evidence without publishing a formal Cycle success.
 - `scheduler.py`: single generation worker and shutdown coordination.
 - `process_orchestrator.py` / `process_worker.py`: production-only, terminable process-group boundary around the unchanged Cycle orchestrator.
 - `command_runner.py`: argv-only subprocess evidence.

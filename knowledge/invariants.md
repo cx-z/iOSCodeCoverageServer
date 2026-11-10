@@ -23,9 +23,10 @@ These rules are ordinary-task stop conditions. A change that needs to violate on
 - Git source comes from exact commit objects, not the working tree. Analysis never checks out, resets, cleans, stashes, merges, rebases, fetches, or creates worktrees.
 - Every Git operation uses the repository registered for Cycle.project. Missing projects fail without fallback.
 - Current positive region evidence wins. Historical positive evidence is inherited only when path/rename, Git line mapping, region range, function identity, and exact source bytes prove the region unchanged.
+- The separate MR display projection may retain individual unchanged lines even when other lines in their former region changed. It uses fixed Git path/hunk identity plus line ambiguity checks and full same-Build line hits, never rewrites formal region decisions, Build/Run inputs or report denominators. Page-selected diff version and actual row three-ref identities must validate before display.
 - Modified, new, copied, ambiguous, or corrupt regions do not inherit. Missing inheritance is uncovered, not guessed covered.
 - `not_measurable`, `unknown`, and deleted lines do not enter the measurable coverage denominator.
-- Analysis failure keeps durable Runs and the previous latest success.
+- Analysis failure keeps durable Runs and the previous formal latest success. A missing/untested current Build may still publish validated independent same-Build evidence for MR display. Its atomic reference never rewrites a formal report or authorizes raw-input deletion; cleanup must protect its validated source result.
 - Immutable analysis output is reusable only after its completion manifest and file identities validate.
 - Incorporated raw profiles may be removed only after a crash-durable retained baseline binds the exact Cycle, Build, input set, and Run identities to an intact `merged.profdata` and LLVM export. Existing evidence must be re-fsynced before it can authorize retry deletion. A later Run merges with that baseline only inside the same Build.
 - The exact coverage binary remains available for future same-Build exports. Historical inheritance continues to consume independently produced per-Build exports and the existing strict Git/region proof.

@@ -87,6 +87,35 @@ class GitLabMRClient:
             raise GitLabMRClientError("gitlab_request_failed", "GitLab MR lookup failed", 502)
         return self._parse_response(normalized, body)
 
+    def fetch_version_refs(self, mr_url: object, version_id: str):
+        """Binds a page-selected numeric diff ID to its immutable three refs."""
+
+        if not isinstance(version_id, str) or re.fullmatch(r"[1-9][0-9]{0,18}", version_id) is None:
+            raise GitLabMRClientError("invalid_page_version", "page diff version is invalid", 400)
+        normalized = normalize_mr_url(mr_url, self.project_registry)
+        definition = normalized.project
+        request = Request(
+            "https://{}/api/v4/projects/{}/merge_requests/{}/versions?per_page=1".format(
+                definition.gitlab.host, quote(definition.gitlab.project_path, safe=""), normalized.iid),
+            method="GET", headers={"PRIVATE-TOKEN": self._load_token(), "Accept": "application/json"})
+        try:
+            status, body = self.transport(request, self.timeout_seconds)
+        except (TimeoutError, socket.timeout, URLError, OSError) as error:
+            raise GitLabMRClientError("gitlab_unavailable", "GitLab version lookup is unavailable", 502) from error
+        if status != 200 or len(body) > GITLAB_RESPONSE_LIMIT:
+            raise GitLabMRClientError("page_version_unavailable", "GitLab page version cannot be verified", 502)
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (UnicodeError, ValueError) as error:
+            raise GitLabMRClientError("gitlab_invalid_response", "GitLab version is invalid", 502) from error
+        if not isinstance(payload, list) or not payload or not isinstance(payload[0], dict):
+            raise GitLabMRClientError("gitlab_invalid_response", "GitLab version identity is invalid", 502)
+        payload = payload[0]
+        if str(payload.get("id")) != version_id:
+            return None
+        return {name + "_sha": self._required_sha(payload, name + "_commit_sha")
+                for name in ("base", "start", "head")}
+
     def _load_token(self) -> str:
         try:
             info = self.token_path.stat()

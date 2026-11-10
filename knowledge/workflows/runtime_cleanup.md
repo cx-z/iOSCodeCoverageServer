@@ -32,6 +32,8 @@ offline CLI -> ServerDeploymentConfiguration -> RuntimeDataCleaner.run
 
 ## Persistence
 
+Independent MR Build references below `analysis/build-evidence` are validated against immutable completion, SQLite Build/Run ownership and on-disk metadata before their source result is protected. These references never authorize additional profile/artifact deletion. An unproven reference conservatively prevents that Build's generation cleanup. The pointer is published under the existing analysis/runtime-lock boundary; cleanup sees a stable writer-free snapshot.
+
 The only cleanup-specific persistent data is completion-protected evidence below `analysis/retained-build`. Timer/status state is intentionally process-local. Evidence is bound to the Cycle, Build, input set, and exact Run identities. Publication and retry fsync the complete directory-entry chain before evidence can authorize deletion. Superseded valid evidence is removed with its obsolete single-Build result. No SQLite row is added or changed. The server and each offline analysis CLI hold `state/server.lock`; the file contains no credential.
 
 ## Success and failure

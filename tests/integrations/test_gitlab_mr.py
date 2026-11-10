@@ -188,6 +188,26 @@ class GitLabMRClientTests(unittest.TestCase):
                 ).fetch(url)
             self.assertEqual(raised.exception.code, code)
 
+    def test_page_version_uses_bounded_registered_metadata_and_exact_refs(self):
+        """Binds the page diff ID without downloading a full potentially huge diff."""
+
+        url = "https://git.example.com/mobile/example-app/merge_requests/42/diffs"
+        payload = [{"id": 123, "base_commit_sha": "a"*40, "start_commit_sha": "b"*40, "head_commit_sha": "c"*40}]
+        calls = []
+        def transport(request, timeout):
+            calls.append((request.full_url, request.get_method()))
+            return 200, json.dumps(payload).encode()
+        client = GitLabMRClient(self.token_path, self.registry, transport=transport)
+        self.assertEqual(client.fetch_version_refs(url, "123"), self.payload["diff_refs"])
+        self.assertEqual(calls, [("https://git.example.com/api/v4/projects/mobile%2Fexample-app/merge_requests/42/versions?per_page=1", "GET")])
+        self.assertIsNone(client.fetch_version_refs(url, "122"))
+        for invalid in (None, 123, "../1", "1?x=2", "0"):
+            with self.assertRaises(GitLabMRClientError):
+                client.fetch_version_refs(url, invalid)
+        payload[0]["head_commit_sha"] = "invalid"
+        with self.assertRaises(GitLabMRClientError):
+            client.fetch_version_refs(url, "123")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,6 +16,7 @@ from ioscoverage.storage.coverage_store import (
     CoverageStoreMaintenanceCancelled,
 )
 from ioscoverage.storage.reports import CoverageReportError, CoverageReportStore
+from ioscoverage.storage.build_evidence import BuildEvidenceStore
 from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore, RetainedEvidenceError
 from ioscoverage.lifecycle.runtime_lock import RuntimeLockError, RuntimeProcessLock
 from ioscoverage.lifecycle.secure_delete import (
@@ -338,6 +339,32 @@ class RuntimeDataCleaner:
                     "reason": getattr(error, "code", "reference_unproven"),
                 })
                 continue
+
+        # Independently published results remain usable even while formal Cycle
+        # selection fails. Their pointers do not authorize profile/artifact removal.
+        independent_store = BuildEvidenceStore(self.paths.analysis_dir)
+        for cycle in snapshot["cycles"]:
+            cycle_id = str(cycle["id"])
+            try:
+                references = independent_store.references(cycle_id)
+            except (OSError, ValueError):
+                for build_id, build in builds.items():
+                    if build["cycle_id"] == cycle_id:
+                        eligible_builds.discard(build_id)
+                skipped.append({"cycle_id": cycle_id, "reason": "independent_evidence_unproven"})
+                continue
+            for reference in references:
+                build_id = reference["build_id"]
+                try:
+                    result_dir, result = independent_store.load(reference)
+                    inputs = result["inputs"]
+                    self._validate_build_snapshot(builds.get(build_id), inputs, cycle_id, build_id)
+                    for run in inputs["runs"]:
+                        self._validate_run_snapshot(run, runs, cycle_id, build_id)
+                    self._protect_reference(retained, result_dir)
+                except (OSError, ValueError, RetainedEvidenceError, RuntimeCleanupError, KeyError, TypeError):
+                    eligible_builds.discard(build_id)
+                    skipped.append({"cycle_id": cycle_id, "reason": "independent_evidence_unproven"})
 
         protected_dirs = {path for path in retained if path.is_dir()}
         for generation in generations:
