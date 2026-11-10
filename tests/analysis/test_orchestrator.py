@@ -556,6 +556,20 @@ class CycleAnalysisOrchestratorTests(unittest.TestCase):
         self.assertEqual(new.summary["cumulative_summary"]["lines"]["measurable"], 10)
         self.assertTrue(old.output_directory.is_dir())
 
+    def test_compiler_allowlist_change_cannot_reuse_completed_cycle(self):
+        """Rechecks the configured mapping policy even with unchanged Builds and Runs."""
+
+        old_orchestrator, _, _, _ = self.workspace.orchestrator()
+        old = old_orchestrator.analyze(self.workspace.cycle_id)
+        new_orchestrator, _, diff, cycle = self.workspace.orchestrator()
+        with patch.object(AnalysisConfiguration, "project_compiler_repository_names",
+                          return_value=("another-checkout",)):
+            new = new_orchestrator.analyze(self.workspace.cycle_id)
+        self.assertNotEqual(old.orchestration_input_sha256, new.orchestration_input_sha256)
+        self.assertFalse(new.idempotent_replay)
+        self.assertEqual(len(diff.calls), 1)
+        self.assertEqual(len(cycle.calls), 1)
+
     def test_failure_staging_never_contains_complete_marker(self):
         """Publishes failure evidence only beneath .failed."""
 

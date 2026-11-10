@@ -28,7 +28,7 @@ from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore
 
 
 ORCHESTRATION_SCHEMA_VERSION = 1
-ORCHESTRATOR_VERSION = "cycle-latest/2"
+ORCHESTRATOR_VERSION = "cycle-latest/5"
 
 
 class CycleAnalysisOrchestrationError(Exception):
@@ -432,7 +432,7 @@ class CycleAnalysisOrchestrator:
     def _build_manifest(
         self, snapshot: Mapping[str, object], selection: Mapping[str, object]
     ) -> Dict[str, object]:
-        """Builds the canonical orchestration identity from the frozen selection."""
+        """Binds the frozen selection and startup-fixed compiler-name policy."""
 
         cycle = snapshot["cycle"]
         selected_builds = []
@@ -466,6 +466,9 @@ class CycleAnalysisOrchestrator:
         return {
             "schema_version": ORCHESTRATION_SCHEMA_VERSION,
             "orchestrator_version": ORCHESTRATOR_VERSION,
+            "compiler_repository_names": list(
+                self.configuration.project_compiler_repository_names(cycle["project"])
+            ),
             "cycle": {
                 "cycle_id": cycle["id"],
                 "schema_version": cycle["schema_version"],

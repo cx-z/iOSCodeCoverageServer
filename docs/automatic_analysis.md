@@ -97,6 +97,8 @@ curl --fail-with-body -X POST \
 
 - 确定性或未知分析失败只执行一次并进入 failed；不修改 Run，不清除 latest success。
 - LLVM 导出含代码区域但整包未能映射到登记项目的固定 Git 源码时，失败码为 `coverage_path_mapping_failed`，不会发布“全部 not_measurable”报告。跨机器路径只有在仓库相对路径唯一、编译根一致、固定 Git 源码区域坐标可核对时才映射；歧义或不匹配分别报告安全错误码。错误响应不返回编译机绝对路径。脚本、配置等确无编译器代码区域的文件仍可为 `not_measurable`。
+- 新 Debug 包使用仓库相对覆盖率路径：服务端直接按 Build 固定 Git 树做精确集合查询，并校验 Git blob 中的区域和 segment 坐标，不推断编译根、不依赖服务端当前目录。新旧路径包可以绑定同一 Cycle 累计，仍按 Build 独立分析后保守继承，零命中修改保持 `uncovered`。
+- 旧绝对路径包的编译 checkout 目录名由项目注册表 `compiler_repository_names` 明确允许，省略时默认只允许登记仓库根目录名。分析器确定一次能对应 Build 固定 Git 路径的唯一编译根，再整批复用该目录前缀；正常路径不再逐条遍历全部 Git 文件。异常路径仍检查第二个有效根，固定 Git 路径的一次性歧义索引防止前缀复用漏掉后续文件中的多个有效切分。多个切分或根直接失败，未登记的根目录名不自动推断。名单按项目隔离，随启动快照传给分析子进程，并计入分析缓存标识；修改名单后需重启服务并正常 retry。原有 Git blob 的区域与 segment 坐标校验、生成文件排除及零计数修改行 `uncovered` 语义保持不变。
 - 跨机器映射以受信任的打包流程为前提：打包凭证持有者应使用 `coveragectl` 对目标项目的干净工作树执行 prepare、Archive 和 register，并保持固定 Git SHA。服务端校验登记项目中的提交与产物身份；现有 LLVM 导出不含源码内容摘要，区域坐标校验不能独立证明 Archive 的源码字节与 Git blob 完全相同。若打包产物可能来自其他源码树，应先纠正打包流程，不能将路径映射结果当作源码内容证明。
 - 新有效 Run 或人工 retry 可以从 failed 请求新 generation。
 - 服务启动把遗留 running 恢复为 queued、清除 running generation 并增加 recovery count；恢复本身不增加 generation，也不循环重试。

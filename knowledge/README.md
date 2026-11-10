@@ -8,7 +8,7 @@ The server receives immutable iOS Build artifacts and user-triggered `.profraw` 
 
 ## Core concepts
 
-- **ProjectRegistry**: immutable mapping from Cycle.project to repository, GitLab project, and Bundle ID allowlist.
+- **ProjectRegistry**: immutable mapping from Cycle.project to repository, GitLab project, Bundle ID allowlist, and compiler repository directory-name allowlist.
 - **Cycle**: one registered-project MR testing lifetime. `base_sha` is initial audit data; `head_sha` selects the current requirement commit.
 - **Build**: one immutable package identity: Git snapshot, coverage binary, dSYM, UUIDs, sizes, and hashes.
 - **Run**: one immutable `.profraw` snapshot tied to its original Cycle and Build.

@@ -10,6 +10,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from ioscoverage.analysis.orchestrator import CycleAnalysisOrchestrationError
 from ioscoverage.analysis.process_orchestrator import ProcessCycleAnalysisOrchestrator
@@ -34,6 +35,30 @@ class ProcessCycleAnalysisOrchestratorTests(unittest.TestCase):
         """Removes the isolated test directory."""
 
         self.temporary.cleanup()
+
+    def test_transient_probe_denial_waits_until_group_absence(self):
+        """Polls through a denied probe without mistaking it for group absence."""
+
+        with patch("ioscoverage.analysis.process_orchestrator.os.killpg", side_effect=[
+            PermissionError("transient denied probe"), None,
+            ProcessLookupError("group exited"), ProcessLookupError("group exited"),
+        ]) as probe:
+            self.assertTrue(ProcessCycleAnalysisOrchestrator._wait_for_group_exit(12345, 1))
+        self.assertEqual(probe.call_count, 4)
+        self.assertTrue(all(call.args == (12345, 0) for call in probe.call_args_list))
+
+    def test_persistent_probe_denial_retains_ownership_and_fails_exit_wait(self):
+        """Keeps cleanup blocked when permissions never allow proving absence."""
+
+        orchestrator = self._orchestrator(lambda _cycle: ())
+        process = Mock(pid=12345)
+        orchestrator._active = process
+        with patch("ioscoverage.analysis.process_orchestrator.os.killpg",
+                   side_effect=PermissionError("denied probe")):
+            self.assertTrue(orchestrator.has_active_process_group())
+            self.assertIs(orchestrator._active, process)
+            self.assertFalse(orchestrator._wait_for_group_exit(process.pid, 0))
+        orchestrator._active = None
 
     def test_successful_child_result_preserves_orchestration_contract(self):
         """Returns the same result shape expected by the existing scheduler."""

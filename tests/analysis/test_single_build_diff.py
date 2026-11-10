@@ -10,7 +10,9 @@ import unittest
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
+from unittest.mock import patch
 
+from ioscoverage.analysis.mapping import coverage_export
 from ioscoverage.analysis.mapping.coverage_export import (
     CoverageExportError,
     CoverageRegion,
@@ -338,6 +340,53 @@ class SingleBuildDiffAnalyzerTests(unittest.TestCase):
             normalize_coverage_export(payload, self.repository)
         self.assertEqual(caught.exception.code, "coverage_path_mapping_failed")
 
+    def test_relative_coverage_preserves_covered_and_uncovered_git_lines(self) -> None:
+        """Uses fixed Git paths directly without selecting a checkout root."""
+
+        self._replace_export(self._coverage_payload("Sources/File.swift"))
+        with patch.object(coverage_export, "_allowed_root_candidates",
+                          side_effect=AssertionError("relative paths must not infer a root")):
+            result = self.analyzer().analyze(self.cycle_id, self.build_id, self.input_sha)
+        self.assertEqual(result.summary["lines"]["covered"], 1)
+        self.assertEqual(result.summary["lines"]["uncovered"], 1)
+
+    def test_relative_coverage_requires_fixed_tree_and_source(self) -> None:
+        """Rejects relative input without immutable Git evidence or with aliases."""
+
+        source = self.controller.sources["Sources/File.swift"]
+        for paths, loader in ((("Sources/File.swift",), None), (None, lambda _: source)):
+            with self.subTest(paths=paths), self.assertRaises(CoverageExportError):
+                normalize_coverage_export(self._coverage_payload("Sources/File.swift"),
+                                          self.repository, paths, loader)
+        for path in ("./Sources/File.swift", "Sources/../Sources/File.swift",
+                     "Sources//File.swift", "Sources\\File.swift", "Other/File.swift"):
+            with self.subTest(path=path), self.assertRaises(CoverageExportError):
+                normalize_coverage_export(self._coverage_payload(path), self.repository,
+                                          ("Sources/File.swift",), lambda _: source)
+
+    def test_relative_coverage_checks_fixed_blob_coordinates(self) -> None:
+        """Rejects geometrically invalid regions even when the relative name exists."""
+
+        with self.assertRaises(CoverageExportError) as caught:
+            normalize_coverage_export(self._coverage_payload("Sources/File.swift"),
+                                      self.repository, ("Sources/File.swift",), lambda _: "x\n")
+        self.assertEqual(caught.exception.code, "coverage_path_source_mismatch")
+
+    def test_local_symlink_after_canonical_file_keeps_resolved_mapping(self) -> None:
+        """Preserves local symlink resolution after another file selects the root."""
+
+        root = self.repository.resolve()
+        (root / "Sources").mkdir(exist_ok=True)
+        (root / "ZAlias").symlink_to("Sources", target_is_directory=True)
+        first = self._coverage_payload(str(root / "A.swift"))
+        alias = self._coverage_payload(str(root / "ZAlias/File.swift"))
+        for key in ("files", "functions"):
+            first["data"][0][key].extend(alias["data"][0][key])
+        result = normalize_coverage_export(first, root,
+                                          ("A.swift", "Sources/File.swift", "ZAlias"))
+        self.assertEqual(set(result.regions_by_path), {"A.swift", "Sources/File.swift"})
+        self.assertEqual(result.unmapped_files, ())
+
     def test_foreign_compiler_root_maps_to_fixed_git_source(self) -> None:
         """Maps a foreign root only through the registered tree and valid regions."""
 
@@ -361,6 +410,122 @@ class SingleBuildDiffAnalyzerTests(unittest.TestCase):
         self.assertFalse((self.analysis_root.parent / "single-build-diff" / self.build_id
                           / self.input_sha).exists())
 
+    def test_renamed_checkout_preserves_uncovered_lines_and_ignores_generated_source(self) -> None:
+        """Uses a configured checkout name without inventing hits or mapping generated files."""
+
+        payload = self._coverage_payload("/builder/work/checkout-2/Sources/File.swift")
+        generated = self._coverage_payload("/builder/work/checkout-2/build/Generated.swift")
+        payload["data"][0]["files"].extend(generated["data"][0]["files"])
+        payload["data"][0]["functions"].extend(generated["data"][0]["functions"])
+        self._replace_export(payload)
+        with patch.object(AnalysisConfiguration, "project_compiler_repository_names",
+                          return_value=("repository", "checkout-2")):
+            result = self.analyzer().analyze(self.cycle_id, self.build_id, self.input_sha)
+        self.assertEqual(result.summary["lines"]["covered"], 1)
+        self.assertEqual(result.summary["lines"]["uncovered"], 1)
+        details = json.loads((result.output_directory / "changed-line-coverage.json").read_text())
+        self.assertEqual([line["state"] for line in details["lines"]],
+                         ["covered", "uncovered", "not_measurable"])
+        normalized = json.loads((result.output_directory / "normalized-coverage.json").read_text())
+        self.assertEqual(normalized["unmapped_coverage_file_count"], 1)
+        self.assertEqual(normalized["files"][0]["repo_relative_path"], "Sources/File.swift")
+        self.assertNotIn("/builder/", json.dumps(normalized))
+
+    def test_renamed_checkout_rejects_ambiguous_suffixes_and_roots(self) -> None:
+        """Refuses multiple allowlisted splits and distinct allowlisted roots."""
+
+        payload = self._coverage_payload("/builder/checkout-2/Modules/checkout-2/Sources/File.swift")
+        with self.assertRaises(CoverageExportError) as caught:
+            normalize_coverage_export(
+                payload, self.repository, ("Sources/File.swift", "Modules/checkout-2/Sources/File.swift"),
+                lambda _: self.controller.sources["Sources/File.swift"],
+                ("checkout-2",),
+            )
+        self.assertEqual(caught.exception.code, "coverage_path_mapping_ambiguous")
+
+        payload = self._coverage_payload("/builder/checkout-2/Sources/File.swift")
+        other = self._coverage_payload("/vendor/another-checkout/Sources/File.swift")
+        payload["data"][0]["files"].extend(other["data"][0]["files"])
+        payload["data"][0]["functions"].extend(other["data"][0]["functions"])
+        with self.assertRaises(CoverageExportError) as caught:
+            normalize_coverage_export(
+                payload, self.repository, ("Sources/File.swift",),
+                lambda _: self.controller.sources["Sources/File.swift"],
+                ("checkout-2", "another-checkout"),
+            )
+        self.assertEqual(caught.exception.code, "coverage_path_mapping_ambiguous")
+
+    def test_renamed_checkout_requires_fixed_git_source(self) -> None:
+        """Does not map a foreign root without both the Git tree and blob loader."""
+
+        payload = self._coverage_payload("/builder/checkout-2/Sources/File.swift")
+        for paths, loader in (
+            (("Sources/File.swift",), None),
+            (None, lambda _: self.controller.sources["Sources/File.swift"]),
+        ):
+            with self.subTest(paths=paths), self.assertRaises(CoverageExportError) as caught:
+                normalize_coverage_export(payload, self.repository, paths, loader, ("checkout-2",))
+            self.assertEqual(caught.exception.code, "coverage_path_mapping_failed")
+
+    def test_unregistered_checkout_name_and_partial_name_are_rejected(self) -> None:
+        """A matching Git suffix cannot authorize a missing or partial directory name."""
+
+        for name in ("unregistered", "checkout-20"):
+            with self.subTest(name=name), self.assertRaises(CoverageExportError) as caught:
+                normalize_coverage_export(
+                    self._coverage_payload("/builder/" + name + "/Sources/File.swift"),
+                    self.repository, ("Sources/File.swift",),
+                    lambda _: self.controller.sources["Sources/File.swift"], ("checkout-2",),
+                )
+            self.assertEqual(caught.exception.code, "coverage_path_mapping_failed")
+
+    def test_compiler_prefix_is_reused_for_later_project_files(self) -> None:
+        """Discovers the compiler root once while processing several files beneath it."""
+
+        payload = self._coverage_payload("/builder/checkout-2/Sources/File.swift")
+        second = self._coverage_payload("/builder/checkout-2/Sources/Other.swift")
+        payload["data"][0]["files"].extend(second["data"][0]["files"])
+        payload["data"][0]["functions"].extend(second["data"][0]["functions"])
+        with patch.object(coverage_export, "_allowed_root_candidates",
+                          wraps=coverage_export._allowed_root_candidates) as candidates:
+            normalized = normalize_coverage_export(
+                payload, self.repository, ("Sources/File.swift", "Sources/Other.swift"),
+                lambda _: self.controller.sources["Sources/File.swift"], ("checkout-2",),
+            )
+        compiler_lookups = [call for call in candidates.call_args_list
+                            if call.args[0].startswith("/builder/")]
+        self.assertEqual(len(compiler_lookups), 1)
+        self.assertEqual(set(normalized.regions_by_path), {"Sources/File.swift", "Sources/Other.swift"})
+
+    def test_prefix_reuse_does_not_hide_nested_root_ambiguity(self) -> None:
+        """Rejects a later ambiguous file even after an earlier file resolved the root."""
+
+        payload = self._coverage_payload("/builder/checkout-2/A.swift")
+        later = self._coverage_payload("/builder/checkout-2/Modules/checkout-2/Sources/File.swift")
+        payload["data"][0]["files"].extend(later["data"][0]["files"])
+        payload["data"][0]["functions"].extend(later["data"][0]["functions"])
+        with self.assertRaises(CoverageExportError) as caught:
+            normalize_coverage_export(
+                payload, self.repository,
+                ("A.swift", "Sources/File.swift", "Modules/checkout-2/Sources/File.swift"),
+                lambda _: self.controller.sources["Sources/File.swift"], ("checkout-2",),
+            )
+        self.assertEqual(caught.exception.code, "coverage_path_mapping_ambiguous")
+
+    def test_unmapped_path_inside_prefix_cannot_hide_a_second_root(self) -> None:
+        """Checks exceptional paths for a second root even beneath the selected prefix."""
+
+        payload = self._coverage_payload("/builder/checkout-2/A.swift")
+        later = self._coverage_payload("/builder/checkout-2/untracked/checkout-2/Sources/File.swift")
+        payload["data"][0]["files"].extend(later["data"][0]["files"])
+        payload["data"][0]["functions"].extend(later["data"][0]["functions"])
+        with self.assertRaises(CoverageExportError) as caught:
+            normalize_coverage_export(
+                payload, self.repository, ("A.swift", "Sources/File.swift"),
+                lambda _: self.controller.sources["Sources/File.swift"], ("checkout-2",),
+            )
+        self.assertEqual(caught.exception.code, "coverage_path_mapping_ambiguous")
+
     def test_unmapped_segment_evidence_also_fails_without_functions(self) -> None:
         """Does not confuse real file segments with a region-free script export."""
 
@@ -381,7 +546,7 @@ class SingleBuildDiffAnalyzerTests(unittest.TestCase):
                 self._coverage_payload(path), self.repository, paths,
                 lambda _: self.controller.sources["Sources/File.swift"],
             )
-        self.assertEqual(caught.exception.code, "coverage_path_mapping_failed")
+        self.assertEqual(caught.exception.code, "coverage_path_mapping_ambiguous")
 
         payload = self._coverage_payload("/builder/one/repository/Sources/File.swift")
         second = self._coverage_payload("/builder/two/repository/Sources/File.swift")
@@ -400,34 +565,40 @@ class SingleBuildDiffAnalyzerTests(unittest.TestCase):
         for path in (
             "/builder/work/repository/Sources/../Sources/File.swift",
             "/builder/work/repository/Sources//File.swift",
+            "/builder/work/checkout-2/Sources/../Sources/File.swift",
+            "/builder/work/checkout-2/Sources//File.swift",
             "/vendor/repository/File.swift",
+            "/vendor/checkout-2/File.swift",
         ):
             with self.subTest(path=path), self.assertRaises(CoverageExportError) as caught:
                 normalize_coverage_export(
                     self._coverage_payload(path), self.repository,
                     ("Sources/File.swift",),
                     lambda _: self.controller.sources["Sources/File.swift"],
+                    ("repository", "checkout-2"),
                 )
             self.assertEqual(caught.exception.code, "coverage_path_mapping_failed")
 
-        payload = self._coverage_payload("/builder/work/repository/Sources/File.swift")
+        payload = self._coverage_payload("/builder/work/checkout-2/Sources/File.swift")
         payload["data"][0]["functions"][0]["regions"][0][2] = 99
         with self.assertRaises(CoverageExportError) as caught:
             normalize_coverage_export(
                 payload, self.repository, ("Sources/File.swift",),
                 lambda _: self.controller.sources["Sources/File.swift"],
+                ("checkout-2",),
             )
         self.assertEqual(caught.exception.code, "coverage_path_source_mismatch")
 
     def test_foreign_coverage_segments_must_fit_git_blob(self) -> None:
         """Rejects a file record whose segment coordinates contradict fixed source."""
 
-        payload = self._coverage_payload("/builder/work/repository/Sources/File.swift")
+        payload = self._coverage_payload("/builder/work/checkout-2/Sources/File.swift")
         payload["data"][0]["files"][0]["segments"] = [[500, 1, 1, True, True, False]]
         with self.assertRaises(CoverageExportError) as caught:
             normalize_coverage_export(
                 payload, self.repository, ("Sources/File.swift",),
                 lambda _: self.controller.sources["Sources/File.swift"],
+                ("checkout-2",),
             )
         self.assertEqual(caught.exception.code, "coverage_path_source_mismatch")
 

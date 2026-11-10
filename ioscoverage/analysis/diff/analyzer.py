@@ -37,7 +37,7 @@ from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore
 
 
 DIFF_ANALYSIS_SCHEMA_VERSION = 1
-DIFF_ANALYZER_VERSION = "single-build-diff/3"
+DIFF_ANALYZER_VERSION = "single-build-diff/6"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 SUPPORTED_COVERAGE_BINARIES = ("main_executable", "debug_dylib")
 
@@ -110,7 +110,8 @@ class SingleBuildDiffAnalyzer:
                 repository_path, str(build["git_sha"]), "git-coverage",
             )
             normalized_coverage = normalize_coverage_export(
-                export_payload, repository_path, git_paths, load_source
+                export_payload, repository_path, git_paths, load_source,
+                self.configuration.project_compiler_repository_names(build["project"]),
             )
             normalized_files = self._generate_git_diff(runner, build, repository_path)
             normalized_diff = normalized_diff_document(normalized_files)
@@ -126,6 +127,9 @@ class SingleBuildDiffAnalyzer:
                 "git_sha": build["git_sha"],
                 "normalized_git_diff_sha256": normalized_diff_sha256,
                 "diff_analyzer_version": DIFF_ANALYZER_VERSION,
+                "compiler_repository_names": list(
+                    self.configuration.project_compiler_repository_names(build["project"])
+                ),
             }
             diff_set_sha256 = self._json_sha256(identity)
             inputs = {

@@ -92,6 +92,17 @@ class AnalysisConfiguration:
             return self.repository_path.resolve()
         raise SingleBuildAnalysisError("project_not_registered", "Cycle project is not registered")
 
+    def project_compiler_repository_names(self, project: object) -> Tuple[str, ...]:
+        """Returns the startup-fixed directory names authorized for this project."""
+
+        if self.project_registry is not None:
+            try:
+                definition = self.project_registry.require(project)
+            except ProjectRegistryError as error:
+                raise SingleBuildAnalysisError(error.code, error.message) from error
+            return definition.compiler_repository_names or (definition.repository_path.name,)
+        return (self.project_repository_path(project).name,)
+
 
 @dataclass(frozen=True)
 class AnalysisResult:

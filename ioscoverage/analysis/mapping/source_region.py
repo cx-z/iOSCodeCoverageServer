@@ -254,10 +254,18 @@ def _map_equal_block(
 
 
 def _normalized_function_name(function_name: str, path: str) -> str:
-    """Allows an explicit file rename to change only Clang's filename prefix."""
+    """Removes a proven source-path qualifier while preserving the full symbol."""
 
     basename = PurePosixPath(path).name
-    prefix = basename + ":"
-    if function_name.startswith(prefix):
-        return function_name[len(prefix) :]
+    for prefix in (path + ":", basename + ":"):
+        if function_name.startswith(prefix):
+            return function_name[len(prefix) :]
+    # Swift keeps the absolute source qualifier even with -coverage-prefix-map.
+    # Only strip it when its complete relative suffix equals this mapped file.
+    filename, separator, symbol = function_name.partition(":")
+    if (separator and symbol and filename.startswith("/")
+            and PurePosixPath(filename).as_posix() == filename
+            and ".." not in PurePosixPath(filename).parts
+            and filename.endswith("/" + path)):
+        return symbol
     return function_name

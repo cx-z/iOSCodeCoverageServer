@@ -43,7 +43,7 @@ from ioscoverage.analysis.mapping.source_region import (
 
 
 CYCLE_COVERAGE_SCHEMA_VERSION = 1
-CYCLE_ANALYZER_VERSION = "cycle-coverage/2"
+CYCLE_ANALYZER_VERSION = "cycle-coverage/5"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -277,7 +277,8 @@ class CycleCoverageAnalyzer:
                 repository_path, git_sha, "git-coverage-{:02d}".format(index),
             )
             coverage = normalize_coverage_export(
-                payload, repository_path, git_paths, load_source
+                payload, repository_path, git_paths, load_source,
+                self.configuration.project_compiler_repository_names(build["project"]),
             )
             result.append(BuildAnalysisInput(build, input_sha, export_sha, coverage))
         result.sort(key=lambda item: (self._build_time(item), str(item.build["id"])))
@@ -718,7 +719,7 @@ class CycleCoverageAnalyzer:
         }
 
     def _build_identity(self, item: BuildAnalysisInput) -> Dict[str, object]:
-        """Returns the stable Build/input/export identity used by cycle hashing."""
+        """Binds Build/export identity and the configured compiler-name policy."""
 
         return {
             "build_id": item.build["id"],
@@ -730,6 +731,9 @@ class CycleCoverageAnalyzer:
             "manifest_sha256": item.build["manifest_sha256"],
             "input_set_sha256": item.input_set_sha256,
             "llvm_cov_export_sha256": item.export_sha256,
+            "compiler_repository_names": list(
+                self.configuration.project_compiler_repository_names(item.build["project"])
+            ),
         }
 
     def _build_time(self, item: BuildAnalysisInput) -> datetime:

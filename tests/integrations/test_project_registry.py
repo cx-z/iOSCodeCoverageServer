@@ -10,7 +10,7 @@ from ioscoverage.projects import ProjectRegistry, ProjectRegistryError
 from ioscoverage.runtime import RuntimeConfigurationError, RuntimePaths
 from ioscoverage.storage.coverage_store import CoverageStore
 from ioscoverage.integrations.git_repository import GitRepositoryError
-from ioscoverage.analysis.single_build.analyzer import AnalysisConfiguration
+from ioscoverage.analysis.single_build.analyzer import AnalysisConfiguration, SingleBuildAnalysisError
 
 
 class RuntimeAndProjectRegistryTests(unittest.TestCase):
@@ -89,6 +89,35 @@ class RuntimeAndProjectRegistryTests(unittest.TestCase):
         with self.assertRaises(ProjectRegistryError) as raised:
             registry.repository("missing")
         self.assertEqual(raised.exception.code, "project_not_registered")
+
+    def test_compiler_names_are_project_specific_and_survive_worker_snapshot(self):
+        """Keeps explicit aliases isolated and defaults old configurations to the repo name."""
+
+        payload = self.payload()
+        payload["projects"][0]["compiler_repository_names"] = ["checkout-2", "repo-a"]
+        registry = ProjectRegistry.from_document(payload)
+        restored = ProjectRegistry.from_document(registry.to_document())
+        configuration = AnalysisConfiguration(
+            self.root / "instance/db", self.root / "data", self.root / "analysis",
+            project_registry=restored,
+        )
+        self.assertEqual(configuration.project_compiler_repository_names("app-a"),
+                         ("checkout-2", "repo-a"))
+        self.assertEqual(configuration.project_compiler_repository_names("app-b"), ("repo-b",))
+        with self.assertRaises(SingleBuildAnalysisError) as raised:
+            configuration.project_compiler_repository_names("missing")
+        self.assertEqual(raised.exception.code, "project_not_registered")
+
+    def test_compiler_names_reject_paths_empty_duplicates_and_malformed_values(self):
+        """Accepts directory names rather than absolute roots or traversal expressions."""
+
+        for names in ([], "repo-a", [""], [" "], [" repo-a"], ["."], [".."],
+                      ["/repo-a"], ["a/b"], ["a\\b"], ["a\x00b"], ["a\nb"],
+                      ["repo-a", "repo-a"], [1], [{}]):
+            payload = self.payload()
+            payload["projects"][0]["compiler_repository_names"] = names
+            with self.subTest(names=names), self.assertRaises(ProjectRegistryError):
+                ProjectRegistry.from_document(payload)
 
     def test_same_mr_iid_is_unique_within_project_not_across_projects(self):
         registry = ProjectRegistry.load(self.write(self.payload()))

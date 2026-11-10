@@ -5,6 +5,7 @@
       "project": "ExampleApp",
       "display_name": "Example App",
       "repository_path": "/path/to/ExampleApp",
+      "compiler_repository_names": ["ExampleApp", "ExampleApp2"],
       "gitlab": {
         "host": "git.example.com",
         "project_path": "mobile/example-app"

@@ -10,6 +10,7 @@ import unittest
 import uuid
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+from unittest.mock import patch
 
 from ioscoverage.analysis.command_runner import EvidenceCommandRunner
 from ioscoverage.cli.analyze_cycle_coverage import parse_build_inputs
@@ -146,7 +147,7 @@ class CycleCoverageAnalyzerTests(unittest.TestCase):
         )
 
     def test_foreign_roots_preserve_only_exact_historical_region(self) -> None:
-        """Uses both Builds' fixed Git trees while retaining strict inheritance."""
+        """Maps differently named checkouts while retaining strict Git inheritance."""
 
         source_a = "// base\nlet x = 1\nlet y = 1\n"
         source_b = "// base\nlet x = 1\nlet y = 2\n"
@@ -162,8 +163,8 @@ class CycleCoverageAnalyzerTests(unittest.TestCase):
             ("Sources/File.swift", 2, 1, 2, 10, 0, "x"),
             ("Sources/File.swift", 3, 1, 3, 10, 0, "y"),
         ])
-        for payload, root in ((old, "/builder/old/repository"),
-                              (new, "/builder/new/repository")):
+        for payload, root in ((old, "/builder/old/checkout-a"),
+                              (new, "/builder/new/checkout-b")):
             for file_record in payload["data"][0]["files"]:
                 file_record["filename"] = root + "/Sources/File.swift"
             for function in payload["data"][0]["functions"]:
@@ -171,13 +172,74 @@ class CycleCoverageAnalyzerTests(unittest.TestCase):
         self._single_result(self.build_a, self.input_a, sha_a, old)
         self._single_result(self.build_b, self.input_b, sha_b, new)
 
-        result = self._analyze(self.build_b, {self.build_a: self.input_a, self.build_b: self.input_b})
+        with patch.object(AnalysisConfiguration, "project_compiler_repository_names",
+                          return_value=("checkout-a", "checkout-b")):
+            result = self._analyze(self.build_b, {self.build_a: self.input_a, self.build_b: self.input_b})
         lines = {line["new_line_number"]: line for line in self._lines(result.output_directory)}
         self.assertEqual(lines[2]["state"], "covered")
         self.assertEqual(lines[2]["regions"][0]["source"]["kind"], "inherited_build")
         self.assertEqual(lines[3]["state"], "uncovered")
         self.assertEqual(lines[3]["regions"][0]["inheritance_attempts"][0]["reason"],
                          "region_contains_modified_or_added_line")
+
+    def test_relative_checkouts_and_legacy_absolute_build_accumulate(self) -> None:
+        """Combines disjoint hits in one Cycle while retaining a zero-hit change."""
+
+        source = "// base\nlet x = 1\nlet y = 1\nlet z = 1\n"
+        sha = self._commit_source("Sources/File.swift", source, "shared checkout commit")
+        self._register_build(self.build_a, sha, 1)
+        self._register_build(self.build_b, sha, 2)
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                input_a = "d" * 64 if legacy else self.input_a
+                input_b = "e" * 64 if legacy else self.input_b
+                for build, identity, counts, filename in (
+                    (self.build_a, input_a, (1, 0, 0),
+                     "/builder/checkout-a/Sources/File.swift" if legacy else "Sources/File.swift"),
+                    (self.build_b, input_b, (0, 1, 0), "Sources/File.swift"),
+                ):
+                    payload = self._coverage(source, [
+                        ("Sources/File.swift", line, 1, line, 10, count, name)
+                        for line, count, name in zip((2, 3, 4), counts, ("x", "y", "z"))
+                    ])
+                    for record in payload["data"][0]["files"]:
+                        record["filename"] = filename
+                    for function in payload["data"][0]["functions"]:
+                        function["filenames"] = [filename]
+                        checkout = "checkout-a" if build == self.build_a else "checkout-b"
+                        function["name"] = "/builder/" + checkout + "/Sources/File.swift:" + function["name"]
+                    self._single_result(build, identity, sha, payload)
+                with patch.object(AnalysisConfiguration, "project_compiler_repository_names",
+                                  return_value=("checkout-a", "checkout-b")):
+                    result = self._analyze(self.build_b, {self.build_a: input_a,
+                                                          self.build_b: input_b})
+                lines = self._lines(result.output_directory)
+                self.assertEqual([line["state"] for line in lines],
+                                 ["covered", "covered", "uncovered"])
+                self.assertEqual(lines[0]["regions"][0]["source"]["build_id"], self.build_a)
+                self.assertEqual(lines[1]["regions"][0]["source"]["kind"], "current_build")
+
+    def test_checkout_qualifier_preserves_symbol_and_source_file_checks(self) -> None:
+        """Matching coordinates cannot inherit another symbol or another file's hit."""
+
+        source = "// base\nlet x = 1\n"
+        sha = self._commit_source("Sources/File.swift", source, "shared source")
+        self._register_build(self.build_a, sha, 1)
+        self._register_build(self.build_b, sha, 2)
+        old = self._coverage(source, [("Sources/File.swift", 2, 1, 2, 10, 1,
+                                       "/builder/checkout-a/Sources/File.swift:x")])
+        self._single_result(self.build_a, self.input_a, sha, old)
+        for name, identity in (("/builder/checkout-b/Sources/File.swift:other_x", "d" * 64),
+                               ("/builder/checkout-b/Other/File.swift:x", "e" * 64)):
+            with self.subTest(name=name):
+                new = self._coverage(source, [("Sources/File.swift", 2, 1, 2, 10, 0, name)])
+                self._single_result(self.build_b, identity, sha, new)
+                result = self._analyze(self.build_b, {self.build_a: self.input_a,
+                                                      self.build_b: identity})
+                line = self._lines(result.output_directory)[0]
+                self.assertEqual(line["state"], "uncovered")
+                self.assertEqual(line["regions"][0]["inheritance_attempts"][0]["reason"],
+                                 "compatible_historical_region_not_found")
 
     def test_current_positive_region_wins_without_history_downgrade(self) -> None:
         """Uses current positive evidence even when the historical count is zero."""

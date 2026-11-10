@@ -248,12 +248,16 @@ class ProcessCycleAnalysisOrchestrator:
 
     @staticmethod
     def _group_exists(process_group_id: int) -> bool:
-        """Checks whether any process remains in the owned execution group."""
+        """Treats denied probes as active until group absence can be confirmed."""
 
         try:
             os.killpg(process_group_id, 0)
         except ProcessLookupError:
             return False
+        except PermissionError:
+            # A disappearing group may briefly deny the probe before ESRCH.
+            # Uncertainty must keep ownership and the cleanup barrier intact.
+            return True
         return True
 
     @classmethod

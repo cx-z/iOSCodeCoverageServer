@@ -85,8 +85,9 @@ def normalize_coverage_export(
     payload: Mapping[str, object], repository_path: Path,
     git_paths: Optional[Sequence[str]] = None,
     source_loader: Optional[Callable[[str], str]] = None,
+    compiler_repository_names: Optional[Sequence[str]] = None,
 ) -> NormalizedCoverage:
-    """Maps local paths, or unique foreign-root paths checked against a fixed Git tree."""
+    """Maps repository-relative or legacy absolute names against fixed Git."""
 
     if payload.get("type") != "llvm.coverage.json.export":
         raise CoverageExportError("coverage_export_unsupported", "unsupported llvm-cov export type")
@@ -111,35 +112,11 @@ def normalize_coverage_export(
     for function in functions:
         if isinstance(function, dict) and isinstance(function.get("filenames"), list):
             filenames.update(value for value in function["filenames"] if isinstance(value, str))
-    path_map: Dict[str, Optional[str]] = {}
-    foreign_roots: Set[str] = set()
-    trusted_paths = set(git_paths or ())
-    for filename in filenames:
-        if not isinstance(filename, str):
-            continue
-        local = _coverage_repo_path(filename, root)
-        if local is not None and (git_paths is None or local in trusted_paths):
-            path_map[filename] = local
-            continue
-        path_map[filename] = None
-        if git_paths is None or source_loader is None or not _valid_compiler_path(filename):
-            continue
-        parts = PurePosixPath(filename).parts
-        candidates = []
-        for path in trusted_paths:
-            suffix = PurePosixPath(path).parts
-            if len(parts) <= len(suffix) or tuple(parts[-len(suffix):]) != suffix:
-                continue
-            prefix = PurePosixPath(*parts[:-len(suffix)])
-            if prefix.name == root.name:
-                candidates.append((path, str(prefix)))
-        if len(candidates) == 1:
-            path_map[filename] = candidates[0][0]
-            foreign_roots.add(candidates[0][1])
-    if len(foreign_roots) > 1:
-        raise CoverageExportError(
-            "coverage_path_mapping_ambiguous", "compiler files resolve through multiple source roots"
-        )
+    path_map = _map_compiler_paths(
+        tuple(sorted(name for name in filenames if isinstance(name, str))), root,
+        None if git_paths is None else set(git_paths), source_loader is not None,
+        set(compiler_repository_names if compiler_repository_names is not None else (root.name,)),
+    )
     file_segments: Dict[str, object] = {}
     conflicts: Dict[str, str] = {}
     unmapped: Set[str] = set()
@@ -273,6 +250,86 @@ def normalize_coverage_export(
     )
 
 
+def _map_compiler_paths(
+    filenames: Sequence[str], repository_root: Path, git_paths: Optional[Set[str]],
+    has_source_loader: bool, allowed_names: Set[str],
+) -> Dict[str, Optional[str]]:
+    """Checks relative names directly and reuses one foreign absolute root."""
+
+    mapped: Dict[str, Optional[str]] = {}
+    compiler_prefix: Optional[str] = None
+    ambiguous_paths: Set[str] = set()
+    for filename in filenames:
+        mapped[filename] = None
+        if not os.path.isabs(filename):
+            if (git_paths is not None and has_source_loader
+                    and filename in git_paths and "\\" not in filename
+                    and "\x00" not in filename
+                    and all(part not in ("", ".", "..") for part in filename.split("/"))):
+                mapped[filename] = filename
+            continue
+        if not _valid_compiler_path(filename):
+            continue
+        # Local paths still need resolve(): a lexical suffix may be a symlink.
+        if (compiler_prefix is not None and compiler_prefix != str(repository_root) + "/"
+                and filename.startswith(compiler_prefix)):
+            relative = filename[len(compiler_prefix):]
+            if git_paths is None or relative in git_paths:
+                if relative in ambiguous_paths:
+                    raise CoverageExportError(
+                        "coverage_path_mapping_ambiguous", "compiler file matches multiple Git source paths"
+                    )
+                mapped[filename] = relative
+            elif has_source_loader and _allowed_root_candidates(filename, git_paths, allowed_names):
+                raise CoverageExportError(
+                    "coverage_path_mapping_ambiguous", "compiler files resolve through multiple source roots"
+                )
+            continue
+        local = _coverage_repo_path(filename, repository_root)
+        if local is not None and (git_paths is None or local in git_paths):
+            candidates = [(local, str(repository_root) + "/")]
+        elif git_paths is not None and has_source_loader:
+            candidates = _allowed_root_candidates(filename, git_paths, allowed_names)
+        else:
+            continue
+        if len(candidates) > 1:
+            raise CoverageExportError(
+                "coverage_path_mapping_ambiguous", "compiler file matches multiple Git source paths"
+            )
+        if len(candidates) == 1:
+            prefix = candidates[0][1]
+            if compiler_prefix is not None and prefix != compiler_prefix:
+                raise CoverageExportError(
+                    "coverage_path_mapping_ambiguous", "compiler files resolve through multiple source roots"
+                )
+            compiler_prefix = prefix
+            mapped[filename] = candidates[0][0]
+            # Index nested-root ambiguity once from Git names. Prefix reuse must
+            # not hide a second valid split in a later file from this root.
+            if git_paths is not None and prefix != str(repository_root) + "/":
+                ambiguous_paths = {
+                    path for path in git_paths
+                    if _allowed_root_candidates("/" + path, git_paths, allowed_names)
+                }
+    return mapped
+
+
+def _allowed_root_candidates(
+    filename: str, git_paths: Set[str], allowed_names: Set[str],
+) -> List[Tuple[str, str]]:
+    """Checks only allowlisted directory boundaries using exact Git set lookups."""
+
+    parts = PurePosixPath(filename).parts
+    candidates = []
+    for index in range(2, len(parts)):
+        if parts[index - 1] not in allowed_names:
+            continue
+        relative = "/".join(parts[index:])
+        if relative in git_paths:
+            candidates.append((relative, str(PurePosixPath(*parts[:index])) + "/"))
+    return candidates
+
+
 def regions_for_source_line(
     regions: Sequence[CoverageRegion], line_number: int, source_lines: Sequence[str]
 ) -> Tuple[Tuple[CoverageRegion, ...], Optional[str]]:
@@ -347,6 +404,7 @@ def fixed_git_sources(
         ["git", "-C", repository, "ls-tree", "-r", "-z", "--name-only", git_sha],
     )
     paths = tuple(path for path in result.stdout.split("\x00") if path)
+    path_set = set(paths)
     if any(path.startswith("/") or "\x00" in path or
            any(part in ("", ".", "..") for part in path.split("/")) for path in paths):
         raise CoverageExportError("coverage_git_tree_invalid", "Build Git tree has invalid source paths")
@@ -355,7 +413,7 @@ def fixed_git_sources(
     def load_source(path: str) -> str:
         """Reads one enumerated blob, caching it for repeated compiler records."""
 
-        if path not in paths:
+        if path not in path_set:
             raise CoverageExportError("coverage_git_tree_invalid", "source path is absent from Build Git tree")
         if path not in cache:
             label = label_prefix + "-source-{:04d}".format(len(cache) + 1)

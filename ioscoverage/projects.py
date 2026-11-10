@@ -35,6 +35,7 @@ class ProjectDefinition:
     repository_path: Path
     gitlab: GitLabProject
     allowed_bundle_ids: Tuple[str, ...]
+    compiler_repository_names: Tuple[str, ...] = ()
 
 
 class ProjectRegistry:
@@ -101,6 +102,9 @@ class ProjectRegistry:
                         "project_path": item.gitlab.project_path,
                     },
                     "allowed_bundle_ids": list(item.allowed_bundle_ids),
+                    "compiler_repository_names": list(
+                        item.compiler_repository_names or (item.repository_path.name,)
+                    ),
                 }
                 for item in self._definitions
             ],
@@ -108,9 +112,13 @@ class ProjectRegistry:
 
     @staticmethod
     def _parse_definition(value: object) -> ProjectDefinition:
-        if not isinstance(value, dict) or set(value) != {
+        """Validates one project and its optional compiler directory-name allowlist."""
+
+        required = {
             "project", "display_name", "repository_path", "gitlab", "allowed_bundle_ids"
-        }:
+        }
+        if (not isinstance(value, dict) or not required.issubset(value)
+                or set(value) - required - {"compiler_repository_names"}):
             raise ProjectRegistryError("project_registry_invalid", "project definition has unknown or missing fields")
         project = value["project"]
         display_name = value["display_name"]
@@ -138,12 +146,23 @@ class ProjectRegistry:
             not isinstance(item, str) or not item.strip() or len(item) > 255 for item in bundle_ids
         ) or len(set(bundle_ids)) != len(bundle_ids):
             raise ProjectRegistryError("project_registry_invalid", "allowed_bundle_ids must be non-empty and unique")
+        names = value.get("compiler_repository_names", [Path(repository_text).resolve().name])
+        if (not isinstance(names, list) or not names or any(
+            not isinstance(name, str) or not name.strip() or name != name.strip()
+            or len(name) > 255 or name in (".", "..")
+            or any(char in name for char in ("/", "\\", "\x00", "\n", "\r"))
+            for name in names
+        ) or len(set(names)) != len(names)):
+            raise ProjectRegistryError(
+                "project_registry_invalid", "compiler_repository_names must contain unique directory names"
+            )
         return ProjectDefinition(
             project=project,
             display_name=display_name.strip(),
             repository_path=Path(repository_text).resolve(),
             gitlab=GitLabProject(host=host, project_path=project_path),
             allowed_bundle_ids=tuple(bundle_ids),
+            compiler_repository_names=tuple(sorted(names)),
         )
 
     @property
