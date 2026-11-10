@@ -14,6 +14,10 @@ from pathlib import Path, PurePosixPath
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ioscoverage.analysis.command_runner import EvidenceCommandRunner
+from ioscoverage.storage.cumulative_lines import (
+    CUMULATIVE_LINES_SCHEMA_VERSION,
+    encode_cumulative_lines,
+)
 from ioscoverage.analysis.mapping.coverage_export import (
     CoverageExportError,
     CoverageRegion,
@@ -43,7 +47,7 @@ from ioscoverage.analysis.mapping.source_region import (
 
 
 CYCLE_COVERAGE_SCHEMA_VERSION = 1
-CYCLE_ANALYZER_VERSION = "cycle-coverage/5"
+CYCLE_ANALYZER_VERSION = "cycle-coverage/6"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -197,9 +201,9 @@ class CycleCoverageAnalyzer:
             self._write_json(
                 staging_dir / "cumulative-line-coverage.json",
                 {
-                    "schema_version": CYCLE_COVERAGE_SCHEMA_VERSION,
+                    "schema_version": CUMULATIVE_LINES_SCHEMA_VERSION,
                     "cycle_input_set_sha256": cycle_input_sha,
-                    "lines": lines,
+                    "lines": encode_cumulative_lines(lines, region_mappings),
                 },
             )
             self._write_json(staging_dir / "mapping-evidence.json", mapping_evidence)

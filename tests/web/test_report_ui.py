@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read-only report projection, HTTP boundary, and browser-shell tests."""
 
+import copy
 import hashlib
 import http.client
 import json
@@ -10,10 +11,13 @@ import tempfile
 import threading
 import unittest
 import uuid
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
 from ioscoverage.storage.analysis_state import AnalysisStateStore
+from ioscoverage.storage import reports
+from ioscoverage.storage.cumulative_lines import encode_cumulative_lines
 from ioscoverage.storage.reports import CoverageReportError, CoverageReportStore
 from ioscoverage.web.pages.report import render_coverage_report_page
 from server import ProbeConfig, ProbeHTTPServer
@@ -157,6 +161,7 @@ class ReportFixture:
                 }
             decisions.append(
                 {
+                    "repo_relative_path": self.path,
                     "covered": state == "covered",
                     "reason": "fixture_region",
                     "current_region": {
@@ -192,6 +197,36 @@ class ReportFixture:
                 "outputs": outputs,
             },
         )
+
+    def use_region_references(self):
+        """Re-publishes the fixture with the same decisions in referenced form."""
+
+        path = self.cycle_directory / "cumulative-line-coverage.json"
+        coverage = json.loads(path.read_text())
+        table = list({
+            json.dumps(region, sort_keys=True): region
+            for line in coverage["lines"] for region in line["regions"]
+        }.values())
+        self._write_json(self.cycle_directory / "mapping-evidence.json", {
+            "schema_version": 1, "region_mappings": table,
+        })
+        self._write_json(path, {
+            **coverage, "schema_version": 2,
+            "lines": encode_cumulative_lines(coverage["lines"], table),
+        })
+        self.refresh_cycle_reference()
+
+    def refresh_cycle_reference(self):
+        """Binds fixture mutations to both completion manifests and their reference."""
+
+        self._refresh_cycle_completion()
+        path = self.orchestration_directory / "results.json"
+        results = json.loads(path.read_text())
+        reference = results["cycle_coverage_result"]
+        reference["completion"] = self._identity(self.cycle_directory / "complete.json")
+        reference["summary"] = self._identity(self.cycle_directory / "summary.json")
+        self._write_json(path, results)
+        self._refresh_orchestration_completion()
 
     def _refresh_orchestration_completion(self):
         """Rehashes every orchestration output after a fixture mutation."""
@@ -301,6 +336,102 @@ class CoverageReportStoreTests(unittest.TestCase):
             self.fixture.store.get_report(self.fixture.cycle_id)
         self.assertEqual(raised.exception.code, "report_completion_invalid")
 
+    def test_large_cumulative_lines_use_their_own_read_budget(self):
+        """Serves summary, details and strict MR projection above the metadata limit."""
+
+        line_path = self.fixture.cycle_directory / "cumulative-line-coverage.json"
+        metadata_limit = line_path.stat().st_size - 1
+        with mock.patch.object(reports, "MAX_REPORT_JSON_BYTES", metadata_limit):
+            report = self.fixture.store.get_report(self.fixture.cycle_id)
+            detail = self.fixture.store.get_file(
+                self.fixture.cycle_id, report["files"][0]["file_id"]
+            )
+            snapshot = self.fixture.store.get_mr_report_snapshot(self.fixture.cycle_id, report)
+        self.assertEqual(report["summary"]["covered"], 2)
+        self.assertEqual(len(detail["lines"]), 5)
+        self.assertEqual(snapshot["details"][detail["file"]["file_id"]]["lines"], detail["lines"])
+
+    def test_cumulative_line_read_budget_is_still_enforced(self):
+        """Rejects a completion-valid line report above its dedicated size limit."""
+
+        line_path = self.fixture.cycle_directory / "cumulative-line-coverage.json"
+        with mock.patch.object(reports, "MAX_CUMULATIVE_LINE_JSON_BYTES", line_path.stat().st_size - 1):
+            with self.assertRaises(CoverageReportError) as raised:
+                self.fixture.store.get_report(self.fixture.cycle_id)
+        self.assertEqual(raised.exception.code, "report_file_too_large")
+
+    def test_shared_evidence_read_budget_is_still_enforced(self):
+        """Accepts a table at its dedicated limit and rejects one byte beyond it."""
+
+        self.fixture.use_region_references()
+        table_size = (self.fixture.cycle_directory / "mapping-evidence.json").stat().st_size
+        with mock.patch.object(reports, "MAX_CUMULATIVE_EVIDENCE_JSON_BYTES", table_size):
+            self.assertEqual(self.fixture.store.get_report(self.fixture.cycle_id)["summary"]["covered"], 2)
+        with mock.patch.object(reports, "MAX_CUMULATIVE_EVIDENCE_JSON_BYTES", table_size - 1):
+            with self.assertRaises(CoverageReportError) as raised:
+                self.fixture.store.get_report(self.fixture.cycle_id)
+        self.assertEqual(raised.exception.code, "report_file_too_large")
+
+    def test_metadata_keeps_the_smaller_read_budget(self):
+        """Does not extend the cumulative budget to completion-verified metadata."""
+
+        path = self.fixture.orchestration_directory / "results.json"
+        payload = json.loads(path.read_text())
+        payload["padding"] = "x" * 8192
+        self.fixture._write_json(path, payload)
+        self.fixture._refresh_orchestration_completion()
+        with mock.patch.object(reports, "MAX_REPORT_JSON_BYTES", 4096):
+            with self.assertRaises(CoverageReportError) as raised:
+                self.fixture.store.get_report(self.fixture.cycle_id)
+        self.assertEqual(raised.exception.code, "report_file_too_large")
+
+    def test_referenced_report_preserves_summary_details_and_mr_snapshot(self):
+        """Keeps all four states and mixed historical/current evidence identical."""
+
+        path = self.fixture.cycle_directory / "cumulative-line-coverage.json"
+        coverage = json.loads(path.read_text())
+        inherited = copy.deepcopy(coverage["lines"][1]["regions"][0])
+        inherited["current_region"] = dict(coverage["lines"][0]["regions"][0]["current_region"])
+        coverage["lines"][0]["regions"].append(inherited)
+        self.fixture._write_json(path, coverage)
+        self.fixture.refresh_cycle_reference()
+        report = self.fixture.store.get_report(self.fixture.cycle_id)
+        detail = self.fixture.store.get_file(self.fixture.cycle_id, report["files"][0]["file_id"])
+        snapshot = self.fixture.store.get_mr_report_snapshot(self.fixture.cycle_id, report)
+        self.assertEqual(detail["lines"][0]["coverage_source"], "mixed")
+        self.fixture.use_region_references()
+        self.assertEqual(self.fixture.store.get_report(self.fixture.cycle_id), report)
+        self.assertEqual(self.fixture.store.get_file(
+            self.fixture.cycle_id, report["files"][0]["file_id"]
+        ), detail)
+        self.assertEqual(self.fixture.store.get_mr_report_snapshot(
+            self.fixture.cycle_id, report
+        ), snapshot)
+
+    def test_completion_valid_dangling_reference_is_rejected(self):
+        """Rejects invalid indices even when the immutable output hashes match."""
+
+        self.fixture.use_region_references()
+        path = self.fixture.cycle_directory / "cumulative-line-coverage.json"
+        coverage = json.loads(path.read_text())
+        coverage["lines"][0]["region_ids"] = [9999]
+        self.fixture._write_json(path, coverage)
+        self.fixture.refresh_cycle_reference()
+        with self.assertRaises(CoverageReportError) as raised:
+            self.fixture.store.get_report(self.fixture.cycle_id)
+        self.assertEqual(raised.exception.code, "report_format_unsupported")
+
+    def test_tampered_region_table_is_rejected_before_projection(self):
+        """Includes the shared evidence table in existing completion verification."""
+
+        self.fixture.use_region_references()
+        path = self.fixture.cycle_directory / "mapping-evidence.json"
+        with path.open("a") as output:
+            output.write(" ")
+        with self.assertRaises(CoverageReportError) as raised:
+            self.fixture.store.get_report(self.fixture.cycle_id)
+        self.assertEqual(raised.exception.code, "report_completion_invalid")
+
     def test_request_controlled_output_directory_is_rejected(self):
         """Requires the fixed Cycle/build/input directory derived from persisted identities."""
 
@@ -352,11 +483,14 @@ class CoverageReportHTTPTests(unittest.TestCase):
     """Verifies browser shell, Bearer data boundary, and route safety."""
 
     anonymous_read = False
+    reference_format = False
 
     def setUp(self):
         """Starts a temporary local HTTP server around one report."""
 
         self.fixture = ReportFixture()
+        if self.reference_format:
+            self.fixture.use_region_references()
         self.token = "report-test-token"
         logger = logging.getLogger("report-ui-test-" + uuid.uuid4().hex)
         logger.handlers = [logging.NullHandler()]
@@ -480,6 +614,12 @@ class CoverageReportAnonymousReadHTTPTests(CoverageReportHTTPTests):
         status, _, body = self._request("GET", prefix + file_id)
         self.assertEqual(status, 200)
         self.assertEqual(len(json.loads(body)["lines"]), 5)
+
+
+class CoverageReportReferenceHTTPTests(CoverageReportAnonymousReadHTTPTests):
+    """Runs the same public report/file boundary against referenced region storage."""
+
+    reference_format = True
 
 
 class CoverageReportWebTests(unittest.TestCase):

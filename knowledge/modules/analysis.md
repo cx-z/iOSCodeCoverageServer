@@ -12,7 +12,7 @@ No HTTP parsing, Run upload, schema migration, Token handling, Git checkout/work
 
 - `single_build/analyzer.py`: `SingleBuildAnalyzer`, `AnalysisConfiguration`.
 - `diff/analyzer.py`: `SingleBuildDiffAnalyzer`; `diff/git_diff_parser.py`: NUL status and zero-context patch parsing.
-- `cumulative/analyzer.py`: `CycleCoverageAnalyzer` and historical hit selection.
+- `cumulative/analyzer.py`: `CycleCoverageAnalyzer` and historical hit selection. Calculation and summary counting still use full in-memory region decisions. Only publication passes lines through `storage/cumulative_lines.py`: cumulative-line schema 2 replaces inline decisions with indices into the already unique, deterministically sorted `mapping-evidence.json` region table. Evidence is stored once across those two files; mapping evidence, summaries, manifests and completion markers retain schema 1. Cumulative and orchestration analyzer versions participate in input identities, so the new representation publishes to a new immutable directory rather than rewriting a prior result. Report reading supports both line schemas; fixed denominators, inheritance and profile handling are unchanged.
 - `mapping/coverage_export.py`: llvm-cov region normalization.
 - `mapping/source_region.py`: exact Git line/range inheritance evidence for formal reports.
 - `mr_presentation.py`, `mapping/mr_lines.py`: read-only current-MR display mapping, separate from formal region inheritance; see `workflows/coverage_report.md`.

@@ -9,12 +9,17 @@ from pathlib import Path, PurePosixPath
 from typing import Dict, List, Mapping, Tuple
 
 from ioscoverage.storage.build_evidence import BuildEvidenceStore
+from ioscoverage.storage.cumulative_lines import decode_cumulative_lines
 from ioscoverage.storage.retained_evidence import RetainedEvidenceError
 from ioscoverage.storage.analysis_state import AnalysisStateStore, AnalysisStateStoreError
 
 
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 MAX_REPORT_JSON_BYTES = 128 * 1024 * 1024
+# Legacy cumulative lines repeat region evidence and can outgrow report metadata.
+MAX_CUMULATIVE_LINE_JSON_BYTES = 512 * 1024 * 1024
+# Shared schema-2 decisions need the same capacity as legacy inline evidence.
+MAX_CUMULATIVE_EVIDENCE_JSON_BYTES = MAX_CUMULATIVE_LINE_JSON_BYTES
 
 
 class CoverageReportError(Exception):
@@ -301,7 +306,10 @@ class CoverageReportStore:
         )
 
         summary = self._load_json(cycle_dir / "summary.json")
-        coverage = self._load_json(cycle_dir / "cumulative-line-coverage.json")
+        coverage = self._load_json(
+            cycle_dir / "cumulative-line-coverage.json",
+            max_bytes=MAX_CUMULATIVE_LINE_JSON_BYTES,
+        )
         if (
             summary.get("status") != "complete"
             or summary.get("cycle_id") != cycle_id
@@ -309,9 +317,18 @@ class CoverageReportStore:
             or summary.get("cycle_input_set_sha256") != cycle_input_sha
         ):
             raise CoverageReportError("report_identity_mismatch", "Cycle summary identity changed")
-        changed_lines = coverage.get("lines")
-        if not isinstance(changed_lines, list):
-            raise CoverageReportError("report_format_unsupported", "Changed-line data is invalid")
+        mapping_evidence = None
+        if coverage.get("schema_version") == 2:
+            mapping_evidence = self._load_json(
+                cycle_dir / "mapping-evidence.json",
+                max_bytes=MAX_CUMULATIVE_EVIDENCE_JSON_BYTES,
+            )
+        try:
+            changed_lines = decode_cumulative_lines(coverage, mapping_evidence)
+        except ValueError as error:
+            raise CoverageReportError(
+                "report_format_unsupported", "Changed-line data is invalid"
+            ) from error
         files = self._file_documents(summary, changed_lines)
         return {
             "cycle_id": cycle_id,
@@ -471,13 +488,15 @@ class CoverageReportStore:
             if size != descriptor.get("size") or digest != descriptor.get("sha256"):
                 raise CoverageReportError("report_result_invalid", "Cycle reference changed")
 
-    def _load_json(self, path: Path) -> Dict[str, object]:
-        """Loads one bounded regular JSON object without following a symlink."""
+    def _load_json(self, path: Path, max_bytes: int = None) -> Dict[str, object]:
+        """Loads a bounded regular object; only cumulative lines get a larger budget."""
 
+        if max_bytes is None:
+            max_bytes = MAX_REPORT_JSON_BYTES
         if not path.is_file() or path.is_symlink():
             raise CoverageReportError("report_file_missing", "Coverage report file is missing")
         try:
-            if path.stat().st_size > MAX_REPORT_JSON_BYTES:
+            if path.stat().st_size > max_bytes:
                 raise CoverageReportError("report_file_too_large", "Coverage report is too large")
             payload = json.loads(path.read_text(encoding="utf-8"))
         except CoverageReportError:

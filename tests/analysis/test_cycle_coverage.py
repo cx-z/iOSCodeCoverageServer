@@ -16,6 +16,9 @@ from ioscoverage.analysis.command_runner import EvidenceCommandRunner
 from ioscoverage.cli.analyze_cycle_coverage import parse_build_inputs
 from ioscoverage.analysis.cumulative.analyzer import CycleCoverageAnalysisError, CycleCoverageAnalyzer
 from ioscoverage.analysis.single_build.analyzer import AnalysisConfiguration
+from ioscoverage.storage.cumulative_lines import decode_cumulative_lines
+from ioscoverage.storage.analysis_state import AnalysisStateStore
+from ioscoverage.storage.reports import CoverageReportStore
 
 
 Region = Tuple[str, int, int, int, int, int, str]
@@ -329,9 +332,16 @@ class CycleCoverageAnalyzerTests(unittest.TestCase):
         self._single_result(self.build_a, self.input_a, sha_a, self._coverage(source_a, region_a))
         self._single_result(self.build_b, self.input_b, sha_b, self._coverage(source_b, region_b))
 
-        lines = self._lines(self._analyze(self.build_b, {self.build_a: self.input_a, self.build_b: self.input_b}).output_directory)
-
+        result = self._analyze(self.build_b, {self.build_a: self.input_a, self.build_b: self.input_b})
+        lines = self._lines(result.output_directory)
         self.assertTrue(all(line["state"] == "uncovered" for line in lines if line["new_line_number"] in (2, 3)))
+        stored = json.loads((result.output_directory / "cumulative-line-coverage.json").read_text())
+        table = json.loads((result.output_directory / "mapping-evidence.json").read_text())["region_mappings"]
+        measured = [line for line in stored["lines"] if line["new_line_number"] in (2, 3)]
+        self.assertEqual(stored["schema_version"], 2)
+        self.assertEqual(len(table), 1)
+        self.assertEqual([line["region_ids"] for line in measured], [[0], [0]])
+        self.assertTrue(all("regions" not in line for line in stored["lines"]))
 
     def test_multiple_histories_can_cover_distinct_regions_on_one_line(self) -> None:
         """Requires every current region while allowing distinct Builds as sources."""
@@ -463,6 +473,95 @@ class CycleCoverageAnalyzerTests(unittest.TestCase):
         self.assertEqual(first.cycle_input_set_sha256, second.cycle_input_set_sha256)
         self.assertEqual(first.summary["lines"], second.summary["lines"])
         self.assertEqual(before, self._tree_identity([self.database, self.data_dir, self.analysis_root]))
+
+    def test_reference_format_publishes_beside_unchanged_legacy_result(self) -> None:
+        """Versions the representation without overwriting an inline completed result."""
+
+        source = "// base\nlet x = 1\n"
+        sha = self._commit_source("Sources/File.swift", source, "build B")
+        self._register_build(self.build_b, sha, 2)
+        self._single_result(self.build_b, self.input_b, sha, self._coverage(
+            source, [("Sources/File.swift", 2, 1, 2, 10, 1, "x")]
+        ))
+        with patch.multiple(
+            "ioscoverage.analysis.cumulative.analyzer",
+            CYCLE_ANALYZER_VERSION="cycle-coverage/5",
+            CUMULATIVE_LINES_SCHEMA_VERSION=1,
+            encode_cumulative_lines=lambda lines, mappings: lines,
+        ):
+            legacy = self._analyze(self.build_b, {self.build_b: self.input_b})
+        before = self._tree_identity([legacy.output_directory])
+        referenced = self._analyze(self.build_b, {self.build_b: self.input_b})
+        self.assertNotEqual(legacy.cycle_input_set_sha256, referenced.cycle_input_set_sha256)
+        self.assertFalse(referenced.idempotent_replay)
+        self.assertEqual(legacy.summary["lines"], referenced.summary["lines"])
+        self.assertEqual(self._lines(legacy.output_directory), self._lines(referenced.output_directory))
+        self.assertEqual(before, self._tree_identity([legacy.output_directory]))
+
+    def test_published_evidence_above_metadata_budget_remains_readable(self) -> None:
+        """Reads a real publisher's large shared table through every report projection."""
+
+        source = "// base\n" + "".join("let value{} = 1\n".format(i) for i in range(40))
+        sha_a = self._commit_source("Sources/File.swift", source, "build A")
+        sha_b = self._commit("build B", allow_empty=True)
+        self._register_build(self.build_a, sha_a, 1)
+        self._register_build(self.build_b, sha_b, 2)
+        regions = [("Sources/File.swift", i + 2, 1, i + 2, 10, 1, "value{}".format(i))
+                   for i in range(40)]
+        self._single_result(self.build_a, self.input_a, sha_a, self._coverage(source, regions))
+        self._single_result(self.build_b, self.input_b, sha_b, self._coverage(
+            source, [(*region[:5], 0, region[6]) for region in regions]
+        ))
+        result = self._analyze(self.build_b, {self.build_a: self.input_a, self.build_b: self.input_b})
+        analysis_root = self.analysis_root.parent
+        orchestration_sha = "d" * 64
+        orchestration_dir = analysis_root / "cycle-latest" / self.cycle_id / orchestration_sha
+        orchestration_dir.mkdir(parents=True)
+
+        def identity(path):
+            """Binds the fixture orchestration to the publisher's actual output bytes."""
+
+            payload = path.read_bytes()
+            return {"size": len(payload), "sha256": hashlib.sha256(payload).hexdigest()}
+
+        results_path = orchestration_dir / "results.json"
+        results_path.write_text(json.dumps({"cycle_coverage_result": {
+            "cycle_input_set_sha256": result.cycle_input_set_sha256,
+            "output_directory": str(result.output_directory),
+            "completion": identity(result.output_directory / "complete.json"),
+            "summary": identity(result.output_directory / "summary.json"),
+        }}))
+        orchestration_completion = orchestration_dir / "complete.json"
+        orchestration_completion.write_text(json.dumps({
+            "status": "complete", "orchestration_input_sha256": orchestration_sha,
+            "outputs": {"results.json": identity(results_path)},
+        }))
+        state_store = AnalysisStateStore(self.database)
+        state_store.request_analysis(self.cycle_id, "manual_retry")
+        generation = state_store.claim(self.cycle_id)
+        state_store.complete_success(self.cycle_id, generation, {
+            "orchestration_input_sha256": orchestration_sha,
+            "cycle_input_set_sha256": result.cycle_input_set_sha256,
+            "current_build_id": self.build_b,
+            "output_directory": str(orchestration_dir),
+            "summary": dict(result.summary),
+        })
+        table_size = (result.output_directory / "mapping-evidence.json").stat().st_size
+        metadata_budget = table_size - 1
+        parsed_metadata = [results_path, orchestration_completion,
+                           result.output_directory / "complete.json",
+                           result.output_directory / "summary.json"]
+        self.assertTrue(all(path.stat().st_size < metadata_budget for path in parsed_metadata))
+        store = CoverageReportStore(analysis_root, state_store)
+        with patch("ioscoverage.storage.reports.MAX_REPORT_JSON_BYTES", metadata_budget):
+            report = store.get_report(self.cycle_id)
+            detail = store.get_file(self.cycle_id, report["files"][0]["file_id"])
+            snapshot = store.get_mr_report_snapshot(self.cycle_id, report)
+        self.assertEqual(report["summary"]["covered"], 40)
+        self.assertEqual(len(detail["lines"]), 40)
+        self.assertTrue(all(line["coverage_source"] == "historical_inheritance"
+                            for line in detail["lines"]))
+        self.assertEqual(snapshot["details"][detail["file"]["file_id"]]["lines"], detail["lines"])
 
     def test_fixed_sha_commands_do_not_read_mutable_target_branches(self) -> None:
         """Uses only persisted merge-base/head objects for the denominator."""
@@ -817,9 +916,11 @@ class CycleCoverageAnalyzerTests(unittest.TestCase):
         return self.analysis_root / build_id / input_sha
 
     def _lines(self, directory: Path) -> List[Dict[str, object]]:
-        """Loads cumulative line evidence from one completed result."""
+        """Resolves the stored format before asserting unchanged coverage semantics."""
 
-        return json.loads((directory / "cumulative-line-coverage.json").read_text())["lines"]
+        coverage = json.loads((directory / "cumulative-line-coverage.json").read_text())
+        evidence = json.loads((directory / "mapping-evidence.json").read_text())
+        return decode_cumulative_lines(coverage, evidence)
 
     def _output_identities(self, directory: Path) -> Dict[str, Dict[str, object]]:
         """Hashes every prior-result file except its completion marker."""

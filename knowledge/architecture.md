@@ -24,6 +24,7 @@ ioscoverage/
     {database,schema,accounts,cycles,builds,runs,artifact_files,validation}.py
     analysis_state.py
     reports.py
+    cumulative_lines.py        pure legacy/reference line-format codec
     retained_evidence.py
     tokens.py
   analysis/                    offline and background analysis implementation
