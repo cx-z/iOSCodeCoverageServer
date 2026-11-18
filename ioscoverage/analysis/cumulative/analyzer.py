@@ -47,7 +47,7 @@ from ioscoverage.analysis.mapping.source_region import (
 
 
 CYCLE_COVERAGE_SCHEMA_VERSION = 1
-CYCLE_ANALYZER_VERSION = "cycle-coverage/6"
+CYCLE_ANALYZER_VERSION = "cycle-coverage/7"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 

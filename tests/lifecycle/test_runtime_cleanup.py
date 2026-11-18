@@ -213,6 +213,7 @@ class CleanupFixture:
         self._write_json(self.orchestration_dir / "results.json", results)
         self._write_json(self.orchestration_dir / "summary.json", {
             "schema_version": 1, "status": "complete", "cycle_id": self.cycle_id,
+            "completed_at": "2026-01-02T03:04:05+00:00",
             "current_build_id": self.build_id,
             "orchestration_input_sha256": self.orchestration_sha,
             "cycle_input_set_sha256": self.cycle_sha,

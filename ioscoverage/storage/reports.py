@@ -264,7 +264,7 @@ class CoverageReportStore:
     def _load_state(
         self, cycle_id: str, state: Mapping[str, object]
     ) -> Dict[str, object]:
-        """Validates both immutable completion directories selected by one state snapshot."""
+        """Reads report identity and publication time from the selected immutable success."""
 
         orchestration_sha = state["latest_success_orchestration_sha256"]
         cycle_input_sha = state["latest_success_cycle_input_sha256"]
@@ -287,6 +287,10 @@ class CoverageReportStore:
             "orchestration_input_sha256",
             orchestration_sha,
         )
+        # A newer running attempt clears scheduler completed_at, but not this publication.
+        published_at = self._load_json(orchestration_dir / "summary.json").get("completed_at")
+        if not isinstance(published_at, str) or not published_at:
+            raise CoverageReportError("report_format_unsupported", "Report publication time is invalid")
         results = self._load_json(orchestration_dir / "results.json")
         cycle_reference = results.get("cycle_coverage_result")
         if not isinstance(cycle_reference, dict):
@@ -333,7 +337,7 @@ class CoverageReportStore:
         return {
             "cycle_id": cycle_id,
             "generation": generation,
-            "updated_at": state["completed_at"],
+            "updated_at": published_at,
             "current_build_id": current_build_id,
             "orchestration_input_sha256": orchestration_sha,
             "cycle_input_set_sha256": cycle_input_sha,

@@ -29,7 +29,7 @@ from ioscoverage.storage.build_evidence import BuildEvidenceStore
 
 
 ORCHESTRATION_SCHEMA_VERSION = 1
-ORCHESTRATOR_VERSION = "cycle-latest/6"
+ORCHESTRATOR_VERSION = "cycle-latest/7"
 
 
 class CycleAnalysisOrchestrationError(Exception):

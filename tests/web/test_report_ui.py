@@ -36,6 +36,7 @@ class ReportFixture:
         self.cycle_id = str(uuid.uuid4())
         self.build_id = str(uuid.uuid4())
         self.orchestration_sha = "a" * 64
+        self.report_completed_at = "2026-01-02T03:04:05+00:00"
         self.cycle_sha = "b" * 64
         with sqlite3.connect(str(self.database)) as connection:
             connection.execute("CREATE TABLE coverage_cycles (id TEXT PRIMARY KEY)")
@@ -142,7 +143,8 @@ class ReportFixture:
         self._write_json(self.orchestration_directory / "results.json", results)
         self._write_json(
             self.orchestration_directory / "summary.json",
-            {"status": "complete", "orchestration_input_sha256": self.orchestration_sha},
+            {"status": "complete", "orchestration_input_sha256": self.orchestration_sha,
+             "completed_at": self.report_completed_at},
         )
         self._refresh_orchestration_completion()
 
@@ -289,6 +291,44 @@ class CoverageReportStoreTests(unittest.TestCase):
         )
         self.assertEqual(report["files"][0]["uncovered"], 1)
         self.assertNotIn("output_directory", json.dumps(report))
+
+    def test_report_publication_time_survives_new_analysis_lifecycle(self):
+        """Keeps the full published report stable through queued, running and failed work."""
+
+        fixture = self.fixture
+        previous = fixture.store.get_report(fixture.cycle_id)
+        self.assertEqual(previous["updated_at"], fixture.report_completed_at)
+        fixture.state_store.request_analysis(fixture.cycle_id, "manual_retry")
+        self.assertEqual(fixture.store.get_report(fixture.cycle_id), previous)
+        generation = fixture.state_store.claim(fixture.cycle_id)
+        self.assertIsNone(fixture.state_store.get_state(fixture.cycle_id)["completed_at"])
+        self.assertEqual(fixture.store.get_report(fixture.cycle_id), previous)
+        detail = fixture.store.get_file(fixture.cycle_id, previous["files"][0]["file_id"])
+        self.assertEqual(detail["updated_at"], previous["updated_at"])
+        fixture.state_store.complete_failure(
+            fixture.cycle_id, generation, "current_diff", "fixture_failure", "analysis failed"
+        )
+        self.assertEqual(fixture.store.get_report(fixture.cycle_id), previous)
+
+        fixture.state_store.request_analysis(fixture.cycle_id, "manual_retry")
+        generation = fixture.state_store.claim(fixture.cycle_id)
+        fixture.orchestration_sha = "e" * 64
+        fixture.orchestration_directory = (
+            fixture.analysis / "cycle-latest" / fixture.cycle_id / fixture.orchestration_sha
+        )
+        fixture.report_completed_at = "2026-01-03T03:04:05+00:00"
+        fixture._publish_orchestration_result()
+        fixture.state_store.complete_success(fixture.cycle_id, generation, {
+            "orchestration_input_sha256": fixture.orchestration_sha,
+            "cycle_input_set_sha256": fixture.cycle_sha,
+            "current_build_id": fixture.build_id,
+            "output_directory": str(fixture.orchestration_directory),
+            "summary": {"covered": 2},
+        })
+        updated = fixture.store.get_report(fixture.cycle_id)
+        self.assertEqual(updated["generation"], generation)
+        self.assertEqual(updated["updated_at"], fixture.report_completed_at)
+        self.assertNotEqual(updated["updated_at"], previous["updated_at"])
 
     def test_path_mapping_failure_keeps_previous_report_readable(self):
         """Retains the exact successful report after a safe mapping failure."""

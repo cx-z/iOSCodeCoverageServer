@@ -531,10 +531,15 @@ class CycleCoverageAnalyzerTests(unittest.TestCase):
             "completion": identity(result.output_directory / "complete.json"),
             "summary": identity(result.output_directory / "summary.json"),
         }}))
+        publication_path = orchestration_dir / "summary.json"
+        publication_path.write_text(json.dumps({
+            "status": "complete", "completed_at": "2026-01-02T03:04:05+00:00",
+        }))
         orchestration_completion = orchestration_dir / "complete.json"
         orchestration_completion.write_text(json.dumps({
             "status": "complete", "orchestration_input_sha256": orchestration_sha,
-            "outputs": {"results.json": identity(results_path)},
+            "outputs": {"results.json": identity(results_path),
+                        "summary.json": identity(publication_path)},
         }))
         state_store = AnalysisStateStore(self.database)
         state_store.request_analysis(self.cycle_id, "manual_retry")

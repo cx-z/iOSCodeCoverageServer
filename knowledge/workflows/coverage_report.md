@@ -7,6 +7,8 @@
 5. **Success:** summary, safe file IDs, changed-line states, source text already stored in analysis output, and current/historical evidence labels.
 6. **Failure:** missing/tampered results are rejected; queued/running/failed states may continue showing the prior latest success.
 
+Report `updated_at` comes from the selected successful orchestration’s completion-verified `summary.json` → `completed_at`, not the scheduler’s mutable latest-attempt `completed_at`. Queued, running and failed attempts preserve the prior report’s timestamp and contents; new successful publication advances the report together. This applies to report/file APIs and both MR resolver schemas.
+
 An export containing compiler code regions but no project mapping fails analysis before publication. Genuine unmeasured compiler lines retain `not_measurable` semantics. Report and report-file APIs validate immutable latest-success output without comparing it with live MR refs. The Cycle page always displays that report's stored source, decisions and formal denominator.
 
 The read-only MR resolver supports two explicit protocols. Schema 1 preserves the three-Build-ref equality gate and returns `stale_diff` on mismatch. Schema 2 requires the page-selected numeric `page_version` (GitLab diff ID), verifies it through the registered MR's latest diff-version metadata and compares all three refs with the live MR. It then returns a separate presentation bound to Cycle, target base/start/head, page version, report generation, current Build, orchestration and input-set hashes. A page that still calls its old version “latest” is rejected. The resolver never creates a Cycle, advances its head, schedules LLVM, or modifies a report.

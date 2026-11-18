@@ -672,6 +672,22 @@ class SingleBuildDiffAnalyzerTests(unittest.TestCase):
         self.assertEqual(result.summary["lines"]["covered"], 1)
         self.assertEqual(result.summary["lines"]["unknown"], 0)
 
+    def test_macro_expansion_preserves_code_region_line_states(self) -> None:
+        """Keeps an expansion record from affecting the file's code-region decisions."""
+
+        payload = self._coverage_payload()
+        function = payload["data"][0]["functions"][0]
+        function["filenames"].append(function["filenames"][0])
+        function["regions"].append([1, 5, 1, 10, 0, 0, 1, 1])
+        self._replace_export(payload)
+
+        result = self.analyzer().analyze(self.cycle_id, self.build_id, self.input_sha)
+        details = json.loads((result.output_directory / "changed-line-coverage.json").read_text())
+        self.assertEqual(
+            [line["state"] for line in details["lines"]],
+            ["covered", "uncovered", "not_measurable"],
+        )
+
     def test_mixed_positive_and_zero_regions_are_uncovered(self) -> None:
         """Applies the requested conservative mixed-region rule."""
 

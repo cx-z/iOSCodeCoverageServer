@@ -418,6 +418,44 @@ class ResolverReadOnlyStorageTests(unittest.TestCase):
             temporary.cleanup()
             fixture.close()
 
+    def test_running_analysis_preserves_valid_published_report_in_both_protocols(self):
+        """Uses real scheduler/report storage so a running job cannot erase report time."""
+
+        fixture = ReportFixture()
+        self.addCleanup(fixture.close)
+        repository = fixture.root / "ExampleApp"
+        subprocess.run(["git", "init", "-q", str(repository)], check=True)
+        registry = project_registry(
+            repository, host="git.example.com", project_path="mobile/example-app"
+        )
+        gitlab = FakeGitLabClient(registry)
+        gitlab.fetch_version_refs = lambda url, version: dict(
+            base_sha=BASE_SHA, start_sha=START_SHA, head_sha=HEAD_SHA
+        )
+        resolver = MergeRequestCoverageResolver(
+            gitlab, FakeCoverageStore(fixture.cycle_id, fixture.build_id),
+            fixture.state_store, fixture.store,
+        )
+        previous = resolver.resolve(MR_URL)["report"]
+        fixture.state_store.request_analysis(fixture.cycle_id, "manual_retry")
+        fixture.state_store.claim(fixture.cycle_id)
+        for protocol in (1, 2):
+            with self.subTest(protocol=protocol):
+                result = (resolver.resolve(MR_URL) if protocol == 1 else
+                          resolver.resolve_presentation(MR_URL, "123"))
+                self.assertEqual(result["status"], "analysis_pending")
+                self.assertTrue(result["can_annotate"])
+                self.assertTrue(result["should_poll"])
+                self.assertEqual(result["report"]["updated_at"], fixture.report_completed_at)
+                self.assertEqual(result["report"], previous)
+                if protocol == 2:
+                    self.assertTrue(result["projection"]["strict_match"])
+                    file_id = result["projection"]["files"][0]["file_id"]
+                    detail = resolver.resolve_presentation(
+                        MR_URL, "123", result["presentation_id"], file_id
+                    )
+                    self.assertTrue(detail["lines"])
+
     def _database_dump(self, path):
         """Returns a logical SQLite snapshot without exposing deployment data."""
 

@@ -37,7 +37,7 @@ from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore
 
 
 DIFF_ANALYSIS_SCHEMA_VERSION = 1
-DIFF_ANALYZER_VERSION = "single-build-diff/6"
+DIFF_ANALYZER_VERSION = "single-build-diff/7"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 SUPPORTED_COVERAGE_BINARIES = ("main_executable", "debug_dylib")
 

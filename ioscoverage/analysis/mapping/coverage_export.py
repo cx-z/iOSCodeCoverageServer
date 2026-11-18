@@ -9,6 +9,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 SUPPORTED_EXPORT_VERSIONS = {"2.0.1"}
 CODE_REGION_KIND = 0
+EXPANSION_REGION_KIND = 1
 SKIPPED_REGION_KIND = 2
 GAP_REGION_KIND = 3
 
@@ -167,7 +168,9 @@ def normalize_coverage_export(
             if relative not in file_segments:
                 conflicts[relative] = "coverage_function_has_no_file_record"
                 continue
-            if kind in (SKIPPED_REGION_KIND, GAP_REGION_KIND):
+            # Expansion records link macro invocations to their expanded regions.
+            # Only code regions supply execution evidence for changed lines.
+            if kind in (EXPANSION_REGION_KIND, SKIPPED_REGION_KIND, GAP_REGION_KIND):
                 continue
             if kind != CODE_REGION_KIND:
                 conflicts[relative] = "unsupported_coverage_region_kind"
