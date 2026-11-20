@@ -22,6 +22,10 @@ from ioscoverage.server.deployment import (
 )
 from ioscoverage.server.http.server import ProbeHTTPServer
 from ioscoverage.server.mr_coverage_resolver import MergeRequestCoverageResolver
+from ioscoverage.server.repository_sync import (
+    DEFAULT_REPOSITORY_SYNC_INTERVAL_SECONDS,
+    RepositorySyncService,
+)
 from ioscoverage.server.logging import configure_logging, write_log
 from ioscoverage.storage.analysis_state import AnalysisStateStore, AnalysisStateStoreError
 from ioscoverage.storage.accounts import AccountStore, AccountStoreError
@@ -57,6 +61,8 @@ def create_server(
     enable_runtime_cleanup: bool = False,
     cleanup_interval_seconds: float = DEFAULT_CLEANUP_INTERVAL_SECONDS,
     packaging_token: Optional[str] = None,
+    enable_repository_sync: bool = True,
+    repository_sync_interval_seconds: float = DEFAULT_REPOSITORY_SYNC_INTERVAL_SECONDS,
 ) -> ProbeHTTPServer:
     """Creates a server whose mutable paths and projects are startup-fixed."""
 
@@ -115,6 +121,17 @@ def create_server(
         if gitlab_mr_client is not None
         else None
     )
+    repository_sync_service = (
+        RepositorySyncService(
+            coverage_store, gitlab_mr_client,
+            logger or logging.getLogger("ios_coverage_server.null"),
+            interval_seconds=repository_sync_interval_seconds,
+            runtime_lock_descriptor=(runtime_process_lock.lease_descriptor
+                                     if runtime_process_lock is not None else None),
+        )
+        if enable_repository_sync and gitlab_mr_client is not None
+        else None
+    )
     config = ProbeConfig(
         token=token,
         data_dir=runtime_paths.data_dir,
@@ -134,6 +151,7 @@ def create_server(
         gitlab_mr_client=gitlab_mr_client,
         report_store=report_store,
         merge_request_coverage_resolver=merge_request_coverage_resolver,
+        repository_sync_service=repository_sync_service,
     )
     return ProbeHTTPServer((host, port), config)
 

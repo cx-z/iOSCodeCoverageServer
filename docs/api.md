@@ -199,7 +199,7 @@ UUID 字段是数组，以支持多架构 Mach-O。每个产物的 `size` 和 `s
 稳定失败规则：
 
 - 必填 Build 字段缺失：HTTP 400 `missing_build_field`；
-- 任一 Git commit object 不存在：HTTP 422 `git_object_not_found`；
+- 任一 Git commit object 不存在：启用服务端仓库同步时，先在存储锁外请求一次 MR source/target 与固定 SHA 同步，再用原 manifest/文件流重试注册一次；同步失败或等待超时返回安全的 HTTP 503（如 `repository_sync_failed`、`repository_sync_timeout` 或对应 GitLab 错误码），不发布 Build。未装配同步服务，或重试后仍缺少对象：HTTP 422 `git_object_not_found`；
 - 两个提交无法得到 merge-base：HTTP 422 `merge_base_unavailable`；
 - 声明值与实际 merge-base 不一致：HTTP 422 `merge_base_mismatch`；
 - multipart 与 manifest 产物集合不一致：HTTP 400 `artifact_set_mismatch`；

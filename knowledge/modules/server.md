@@ -13,6 +13,7 @@ No SQL, artifact persistence, LLVM, Git diff, cumulative mapping, page business-
 - `ioscoverage/server/deployment.py`: strict source-side `config/server.json` loader; it owns the runtime-root pointer and the `anonymous_read` flag.
 - `ioscoverage/server/bootstrap.py`: `RuntimePaths`/ProjectRegistry dependency assembly, option parsing, `create_server`, `main`.
 - `ioscoverage/server/mr_coverage_resolver.py`: read-only GitLab MR/Cycle/state/report/Build identity orchestration and versioned MR presentation orchestration. Schema 1 keeps the exact three-SHA gate; schema 2 verifies the page-selected version and delegates display-only line mapping to analysis.
+- `ioscoverage/server/repository_sync.py`: server-owned serial worker for startup, periodic and requested MR source/target synchronization. It reads Cycle/MR identities, delegates bounded Git writes, and supplies missing-object Build repair without changing Cycle head or scheduling analysis. See `workflows/repository_sync.md`.
 - `ioscoverage/server/config.py`: `ProbeConfig` (including `anonymous_read`, AccountStore, and packaging Token), deployment options, and protocol limits.
 - `ioscoverage/server/http/server.py`: `ProbeHTTPServer`, analysis-worker, and cleanup-worker lifecycle.
 - `ioscoverage/server/http/router.py`: `ProbeRequestHandler` and route matching.

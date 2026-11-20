@@ -15,8 +15,13 @@ import threading
 import unittest
 import uuid
 import zipfile
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
 from ioscoverage.runtime import RuntimePaths
+from ioscoverage.integrations.gitlab_mr import GitLabMergeRequest
+from ioscoverage.server.repository_sync import RepositorySyncService
 from tests.helpers import project_registry
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -709,6 +714,74 @@ class APIContractTests(unittest.TestCase):
         status, payload = self.register_build(mismatch_manifest, files)
         self.assertEqual(status, 422)
         self.assertEqual(payload["error"], "merge_base_mismatch")
+
+    def test_build_registration_repairs_a_stale_repository_with_real_artifacts(self) -> None:
+        """Fetches a developer's new commit before retrying the same multipart registration."""
+
+        self._assert_stale_repository_registration_repair()
+
+    def test_build_repair_accepts_uppercase_snapshot_without_rewriting_manifest(self) -> None:
+        """Preserves accepted case-insensitive snapshots and their original content hash."""
+
+        self._assert_stale_repository_registration_repair(uppercase=True)
+
+    def _assert_stale_repository_registration_repair(self, uppercase=False) -> None:
+        """Checks real missing-object repair, original manifest hashing and idempotent replay."""
+
+        origin, developer = self.root / "origin.git", self.root / "developer"
+        def git_at(path, *arguments):
+            """Runs fixture Git without using the service's synchronized repository helpers."""
+
+            return subprocess.run(["git", "-C", str(path), *arguments], check=True,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True).stdout.strip()
+        git_at(self.root, "clone", "--bare", "-q", str(self.repository), str(origin))
+        git_at(self.root, "clone", "-q", str(origin), str(developer))
+        git_at(developer, "config", "user.name", "Test")
+        git_at(developer, "config", "user.email", "test@example.test")
+        (developer / "later.txt").write_text("new MR change\n", encoding="utf-8")
+        git_at(developer, "add", "later.txt")
+        git_at(developer, "commit", "-q", "-m", "new package commit")
+        new_head = git_at(developer, "rev-parse", "HEAD")
+        git_at(developer, "push", "-q", "origin", "feature")
+        remote_url = "https://git.example.test/mobile/ExampleApp.git"
+        self.git("remote", "add", "origin", remote_url)
+        self.git("config", "url.{}.insteadOf".format(origin.as_uri()), remote_url)
+        self.git("config", "protocol.file.allow", "always")
+        store = self.server.config.coverage_store
+        self.cycle_id = store.create_cycle({
+            "schema_version": 1, "project": "ExampleApp", "mr_iid": "124",
+            "mr_url": "https://git.example.test/mobile/ExampleApp/merge_requests/124",
+            "target_branch": self.target_branch, "base_sha": self.base_sha, "head_sha": new_head,
+        })["id"]
+        mr = GitLabMergeRequest("ExampleApp", "ExampleApp", 124,
+            "https://git.example.test/mobile/ExampleApp/merge_requests/124", "opened", "feature",
+            self.target_branch, self.base_sha, self.target_sha, new_head)
+        service = RepositorySyncService(store, SimpleNamespace(fetch=lambda url: mr), self.logger)
+        # Hold the periodic scan out of this scenario so only the authorized
+        # registration can repair the known-missing commit.
+        service._enqueue_registered_cycles = Mock()
+        service.ensure_cycle = Mock(wraps=service.ensure_cycle)
+        self.server.config = replace(self.server.config, repository_sync_service=service)
+        service.start()
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.git("cat-file", "-e", new_head + "^{commit}")
+        manifest, files = self.build_material()
+        manifest["git_sha"] = new_head
+        if uppercase:
+            for name in ("git_sha", "target_sha_at_build", "merge_base_sha"):
+                manifest[name] = str(manifest[name]).upper()
+        original_manifest = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        status, payload = self.register_build(manifest, files)
+        self.assertEqual(status, 201, payload)
+        service.ensure_cycle.assert_called_once_with(self.cycle_id, (new_head, self.target_sha, self.base_sha))
+        self.assertEqual(self.git("rev-parse", "HEAD"), self.head_sha)
+        build = store.get_build(str(manifest["build_id"]))
+        self.assertEqual(build["git_sha"], new_head)
+        self.assertEqual(build["target_sha_at_build"], self.target_sha)
+        self.assertEqual(build["manifest_sha256"], hashlib.sha256(original_manifest).hexdigest())
+        status, payload = self.register_build(manifest, files)
+        self.assertEqual(status, 200, payload)
+        self.assertTrue(payload["idempotent_replay"])
 
     def test_build_id_conflict_includes_comparison_snapshot_fields(self) -> None:
         """Treats a changed valid comparison snapshot as different Build content."""

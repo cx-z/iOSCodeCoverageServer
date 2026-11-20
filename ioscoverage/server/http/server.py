@@ -30,12 +30,20 @@ class ProbeHTTPServer(ThreadingHTTPServer):
                 self.config.analysis_scheduler.start()
             if self.config.runtime_cleanup_manager is not None:
                 self.config.runtime_cleanup_manager.start()
+            if self.config.repository_sync_service is not None:
+                self.config.repository_sync_service.start()
         except Exception:
-            if self.config.analysis_scheduler is not None:
-                completed = self.config.analysis_scheduler.shutdown(timeout=30.0)
-            else:
-                completed = True
-            super().server_close()
+            try:
+                if self.config.repository_sync_service is not None:
+                    self.config.repository_sync_service.shutdown()
+            finally:
+                if self.config.analysis_scheduler is not None:
+                    completed = self.config.analysis_scheduler.shutdown(timeout=30.0)
+                else:
+                    completed = True
+                if self.config.runtime_cleanup_manager is not None:
+                    self.config.runtime_cleanup_manager.shutdown()
+                super().server_close()
             if not completed:
                 raise AnalysisSchedulerError(
                     "analysis_shutdown_incomplete",
@@ -44,10 +52,16 @@ class ProbeHTTPServer(ThreadingHTTPServer):
             raise
 
     def server_close(self) -> None:
-        """Closes the listener but retains lifecycle ownership until workers stop."""
+        """Stops repository writes and analysis before releasing service ownership."""
 
         completed = True
+        synchronization_error = None
         try:
+            if self.config.repository_sync_service is not None:
+                try:
+                    self.config.repository_sync_service.shutdown()
+                except Exception as error:
+                    synchronization_error = error
             if self.config.runtime_cleanup_manager is not None:
                 self.config.runtime_cleanup_manager.shutdown()
             if self.config.analysis_scheduler is not None:
@@ -66,6 +80,8 @@ class ProbeHTTPServer(ThreadingHTTPServer):
                 "analysis_shutdown_incomplete",
                 "background analysis could not be stopped safely",
             )
+        if synchronization_error is not None:
+            raise synchronization_error
 
     def handle_error(self, request: object, client_address: Tuple[str, int]) -> None:
         """Persists uncaught request failures so terminal access is not required."""

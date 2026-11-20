@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 from ioscoverage.analysis.scheduler import AnalysisSchedulerError
 from ioscoverage.integrations.gitlab_mr import GitLabMRClientError
+from ioscoverage.integrations.git_sync import RepositorySyncError
 from ioscoverage.integrations.xcode_artifacts import ArtifactValidationError
 from ioscoverage.storage.analysis_state import AnalysisStateStoreError
 from ioscoverage.storage.coverage_store import CoverageStoreError
@@ -33,7 +34,7 @@ from ioscoverage.web.pages.report import render_coverage_report_page
 
 class BuildRoutesMixin:
     def _handle_build_register(self) -> None:
-        """Registers one exact required/optional Build artifact set."""
+        """Registers exact artifacts, repairing missing Git objects once before retry."""
 
         try:
             text_fields, file_fields = self._read_multipart_body(
@@ -45,9 +46,25 @@ class BuildRoutesMixin:
             artifacts = {
                 name: (part.filename or "", part.file) for name, part in file_fields.items()
             }
-            build, duplicate = self.config.coverage_store.register_build(
-                manifest, artifacts, self.config.max_build_artifact_bytes
-            )
+            try:
+                build, duplicate = self.config.coverage_store.register_build(
+                    manifest, artifacts, self.config.max_build_artifact_bytes
+                )
+            except CoverageStoreError as error:
+                synchronizer = self.config.repository_sync_service
+                if error.code != "git_object_not_found" or synchronizer is None:
+                    raise
+                # Git validation precedes all artifact reads and publication. The failed
+                # store call has released its mutation guard, so a network wait is safe.
+                synchronizer.ensure_cycle(str(manifest["cycle_id"]), tuple(
+                    str(manifest[name]).lower() for name in ("git_sha", "target_sha_at_build", "merge_base_sha")))
+                build, duplicate = self.config.coverage_store.register_build(
+                    manifest, artifacts, self.config.max_build_artifact_bytes
+                )
+        except RepositorySyncError as error:
+            self._log_event("repository_sync_failed", level=logging.WARNING, reason=error.code)
+            self._send_json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": error.code, "message": error.message})
+            return
         except (CoverageStoreError, ValueError) as error:
             self._send_domain_error(error)
             return

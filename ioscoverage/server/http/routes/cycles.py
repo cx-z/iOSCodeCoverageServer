@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 from ioscoverage.analysis.scheduler import AnalysisSchedulerError
 from ioscoverage.integrations.gitlab_mr import GitLabMRClientError
+from ioscoverage.integrations.git_sync import RepositorySyncError
 from ioscoverage.integrations.xcode_artifacts import ArtifactValidationError
 from ioscoverage.storage.analysis_state import AnalysisStateStoreError
 from ioscoverage.storage.coverage_store import CoverageStoreError
@@ -86,6 +87,11 @@ class CycleRoutesMixin:
             return
         event = "cycle_reused" if reused else "cycle_created"
         self._log_event(event, cycle_id=cycle["id"], mr_iid=cycle.get("mr_iid"))
+        if self.config.repository_sync_service is not None:
+            try:
+                self.config.repository_sync_service.request_cycle(str(cycle["id"]))
+            except RepositorySyncError as error:
+                self._log_event("repository_sync_request_rejected", reason=error.code)
         response = {"status": "reused" if reused else "created", "cycle": cycle}
         if principal.kind == "web_user":
             response["submission_status"] = (

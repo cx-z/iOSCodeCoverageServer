@@ -278,6 +278,17 @@ class CycleStoreMixin:
             results.append(self._project_cycle_row(row))
         return results
 
+    def list_repository_sync_cycles(self) -> List[Dict[str, object]]:
+        """Reads persisted MR identities without display projection or registry lookup."""
+
+        with self._database() as connection:
+            rows = connection.execute(
+                "SELECT id, project, mr_iid, mr_url FROM coverage_cycles "
+                "WHERE mr_iid IS NOT NULL AND mr_url IS NOT NULL "
+                "ORDER BY updated_at DESC, id DESC"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def _project_cycle_row(self, row: sqlite3.Row) -> Dict[str, object]:
         """Adds trusted registry display fields to one database Cycle projection."""
 

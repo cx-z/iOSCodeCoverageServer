@@ -10,6 +10,7 @@ from ioscoverage.analysis.scheduler import AnalysisScheduler
 from ioscoverage.lifecycle.manager import RuntimeCleanupManager
 from ioscoverage.integrations.gitlab_mr import GitLabMRClient
 from ioscoverage.server.mr_coverage_resolver import MergeRequestCoverageResolver
+from ioscoverage.server.repository_sync import RepositorySyncService
 from ioscoverage.storage.analysis_state import AnalysisStateStore
 from ioscoverage.storage.accounts import AccountStore
 from ioscoverage.storage.coverage_store import CoverageStore
@@ -48,3 +49,4 @@ class ProbeConfig:
     gitlab_mr_client: Optional[GitLabMRClient] = None
     report_store: Optional[CoverageReportStore] = None
     merge_request_coverage_resolver: Optional[MergeRequestCoverageResolver] = None
+    repository_sync_service: Optional[RepositorySyncService] = None

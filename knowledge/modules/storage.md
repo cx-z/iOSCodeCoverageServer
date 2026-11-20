@@ -12,6 +12,7 @@ No HTTP status selection, browser rendering, LLVM/Git analysis, or GitLab networ
 
 - `coverage_store.py`: stable `CoverageStore` facade and constructor.
 - `cycles.py`, `builds.py`, `runs.py`: resource persistence methods. `create_or_get_cycle_for_user` atomically creates/reuses a Cycle and records the submitter; developer list/detail reads enforce that relation.
+- `cycles.py.list_repository_sync_cycles` returns only persisted MR synchronization identities without display projection or a registry lookup. The server worker validates each Cycle separately; a removed project's historical Cycle cannot abort discovery for registered projects. User-facing Cycle reads retain their existing registry and ownership checks.
 - `accounts.py`: AccountStore user/password/session lifecycle. Passwords use salted scrypt; Session rows store only SHA-256 and are revoked atomically on disable/reset.
 - `database.py`: connection/transaction context; `schema.py`: schema v4, existing triggers, account/session/submission tables, and transactional v3→v4 migration.
 - `artifact_files.py`: staging, hashing, fsync, atomic paths; `validation.py` and `common.py`: stable field/error rules.

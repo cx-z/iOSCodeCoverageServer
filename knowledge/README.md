@@ -63,6 +63,7 @@ See [architecture](architecture.md) for allowed dependencies and [invariants](in
 | Cycle/Build/Run persistence, SQLite or file integrity | `modules/storage.md`, relevant workflow |
 | LLVM, diff, cumulative mapping or orchestration | `modules/analysis.md`, `workflows/automatic_analysis.md` |
 | Git, GitLab or Xcode validation | `modules/integrations.md` and the calling workflow |
+| MR commits missing locally / automatic source-target synchronization | `modules/integrations.md`, `workflows/repository_sync.md` |
 | CLI or startup script | `modules/tools.md` |
 | Runtime growth, retained evidence, or cleanup | `modules/storage.md`, `modules/analysis.md`, `workflows/runtime_cleanup.md` |
 | Public repository safety or release-candidate scan | `modules/tools.md`, `invariants.md` |
