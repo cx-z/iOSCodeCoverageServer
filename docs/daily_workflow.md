@@ -15,7 +15,7 @@ cd /path/to/ios-coverage-server
 python3 manage_users.py create-admin --username <admin-name>
 ```
 
-命令通过终端两次隐藏输入密码，不接受密码参数，也不输出密码或摘要。保持服务终端运行；停止时按 `Control-C`。浏览器打开 `http://127.0.0.1:8765/login/`：默认显示登录，首次使用可从表单下方切换为注册；注册成功会自动登录并进入 `/cycles/`，无需再次输入密码。已有有效会话访问登录页会直接进入工作台；未登录访问 `/cycles/` 会跳回登录页。packaging 凭证位于 `<runtime_root>/state/packaging_token`，受限 iOS 凭证位于 `<runtime_root>/state/run_upload_token`，GitLab PAT 位于 `<runtime_root>/state/gitlab_api_token`；operator Token只保留管理员兼容。真实项目配置和全部运行数据只保存在 runtime root，不复制进源码仓库。
+命令通过终端两次隐藏输入密码，不接受密码参数，也不输出密码或摘要。启动脚本先强制重新编译 Python 源码，通过后关闭当前 checkout 的旧服务并在后台重新启动；编译失败会保留旧服务。确认健康检查通过后脚本返回命令行，不需保留终端。运行日志写入 `<runtime_root>/logs/server.log`，标准输出/错误写入同目录的 `server-console.log`。停止时运行 `./stop_coverage_server.sh`；关闭会等待优雅退出，不强杀进程或删除运行锁。浏览器打开 `http://127.0.0.1:8765/login/`：默认显示登录，首次使用可从表单下方切换为注册；注册成功会自动登录并进入 `/cycles/`，无需再次输入密码。已有有效会话访问登录页会直接进入工作台；未登录访问 `/cycles/` 会跳回登录页。packaging 凭证位于 `<runtime_root>/state/packaging_token`，受限 iOS 凭证位于 `<runtime_root>/state/run_upload_token`，GitLab PAT 位于 `<runtime_root>/state/gitlab_api_token`；operator Token只保留管理员兼容。真实项目配置和全部运行数据只保存在 runtime root，不复制进源码仓库。
 
 ## Cycle 与测试包
 

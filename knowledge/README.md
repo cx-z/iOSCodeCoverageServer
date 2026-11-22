@@ -46,7 +46,7 @@ See [architecture](architecture.md) for allowed dependencies and [invariants](in
 
 ## Daily entry points
 
-- Start/diagnose service: configure `config/server.json`, then run `./start_coverage_server.sh`; use `python3 server.py --help` for options
+- Start/diagnose service: configure `config/server.json`, then run `./start_coverage_server.sh` (force-compile then restart in background and wait for readiness); stop with `./stop_coverage_server.sh`; use `python3 server.py --help` for options
 - Account login/registration: `/login/`; authenticated Cycle workbench: `/cycles/`; report: `/cycles/<cycle_id>`; admin account management: `/admin/users/`
 - Initial admin: `python3 manage_users.py create-admin --username <name>` while the service is stopped
 - Diagnostic analysis only: the four root `analyze_*.py` compatibility commands

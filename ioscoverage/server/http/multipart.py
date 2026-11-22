@@ -38,22 +38,29 @@ class MultipartMixin:
         expected_file_fields: set,
         maximum_request_bytes: int,
         optional_file_fields: Optional[set] = None,
+        body_stream=None,
+        body_length: Optional[int] = None,
     ) -> Tuple[Dict[str, str], Dict[str, cgi.FieldStorage]]:
-        """Spools a bounded multipart body and enforces required and optional fields."""
+        """Parses a bounded original or already decoded body with exact multipart fields."""
 
         content_type = self.headers.get("Content-Type", "")
         if not content_type.lower().startswith("multipart/form-data"):
             raise CoverageStoreError(
                 "multipart_form_data_required", "Content-Type must be multipart/form-data"
             )
-        content_length = self._parse_content_length()
+        content_length = self._parse_content_length() if body_length is None else body_length
         if content_length is None:
             raise CoverageStoreError("content_length_required", "Content-Length is required")
         if content_length <= 0 or content_length > maximum_request_bytes:
             raise CoverageStoreError("request_too_large", "multipart request exceeds its configured limit")
+        from email.message import Message
+
+        parser_headers = Message()
+        parser_headers["Content-Type"] = content_type
+        parser_headers["Content-Length"] = str(content_length)
         form = cgi.FieldStorage(
-            fp=self.rfile,
-            headers=self.headers,
+            fp=self.rfile if body_stream is None else body_stream,
+            headers=parser_headers,
             environ={
                 "REQUEST_METHOD": "POST",
                 "CONTENT_TYPE": content_type,

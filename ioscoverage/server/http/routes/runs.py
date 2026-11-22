@@ -27,29 +27,37 @@ from ioscoverage.storage.analysis_state import AnalysisStateStoreError
 from ioscoverage.storage.coverage_store import CoverageStoreError
 from ioscoverage.storage.reports import CoverageReportError
 from ioscoverage.server.config import *
+from ioscoverage.server.http.run_body import decoded_run_body
 from ioscoverage.web.pages.cycles import render_cycle_list_page
 from ioscoverage.web.pages.report import render_coverage_report_page
 
 
 class RunRoutesMixin:
     def _handle_run_upload(self) -> None:
-        """Accepts one independently hashed profraw and returns its durable Run state."""
+        """Decodes one bounded Run body before existing immutable profile persistence."""
 
         try:
-            text_fields, file_fields = self._read_multipart_body(
-                {"metadata", "sha256"}, {"profile"},
+            with decoded_run_body(
+                self.headers, self.rfile,
                 self.config.max_run_bytes + MULTIPART_OVERHEAD_BYTES,
-            )
-            metadata = self._decode_json_field(text_fields["metadata"], "metadata")
-            profile = file_fields["profile"]
-            run, duplicate = self.config.coverage_store.save_run(
-                metadata,
-                text_fields["sha256"],
-                profile.filename or "",
-                profile.file,
-                self.config.max_run_bytes,
-            )
+            ) as (body, length):
+                text_fields, file_fields = self._read_multipart_body(
+                    {"metadata", "sha256"}, {"profile"},
+                    self.config.max_run_bytes + MULTIPART_OVERHEAD_BYTES,
+                    body_stream=body, body_length=length,
+                )
+                try:
+                    metadata = self._decode_json_field(text_fields["metadata"], "metadata")
+                    profile = file_fields["profile"]
+                    run, duplicate = self.config.coverage_store.save_run(
+                        metadata, text_fields["sha256"], profile.filename or "",
+                        profile.file, self.config.max_run_bytes,
+                    )
+                finally:
+                    for part in file_fields.values():
+                        part.file.close()
         except (CoverageStoreError, ValueError) as error:
+            self.close_connection = True
             self._send_domain_error(error)
             return
         status = HTTPStatus.OK if duplicate else (

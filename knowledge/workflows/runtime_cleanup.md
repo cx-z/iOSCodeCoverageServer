@@ -2,7 +2,7 @@
 
 ## Entry
 
-Production bootstrap creates `RuntimeCleanupManager` around the existing `RuntimeDataCleaner`. After the listen socket binds, it recovers interrupted analysis state to queued, runs one synchronous cleanup before workers or HTTP serving, then starts a 24-hour in-memory timer. Operator GET/POST `/api/v1/maintenance/cleanup` exposes bounded status and asynchronous manual triggering. Restarting the process resets the timer.
+Production bootstrap creates `RuntimeCleanupManager` around the existing `RuntimeDataCleaner`. Production bootstrap installs deferred TERM/INT handlers before acquiring the runtime lock or constructing the listener. Signals during startup record intent without interrupting synchronous cleanup; a pending stop skips worker startup/serving and closes owners after cleanup returns. After the listen socket binds, it recovers interrupted analysis state to queued, runs one synchronous cleanup before workers or HTTP serving, then starts a 24-hour in-memory timer. Operator GET/POST `/api/v1/maintenance/cleanup` exposes bounded status and asynchronous manual triggering. Restarting the process resets the timer.
 
 `cleanup_runtime_data.py` remains the offline audit/fallback: it loads the same RuntimePaths, defaults to dry-run, and only `--apply` deletes.
 

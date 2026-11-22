@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """HTTP component tests for Cycle, Build, and Run contracts."""
 
+import gzip
 import hashlib
 import http.client
 import io
@@ -901,6 +902,59 @@ class APIContractTests(unittest.TestCase):
         )
         self.assertEqual(status, 422)
         self.assertEqual(payload["error"], "sha256_mismatch")
+
+    def test_gzip_run_keeps_original_identity_and_replays_identity(self) -> None:
+        """Persists decoded bytes and accepts cross-encoding replay without a second Run."""
+
+        metadata = self.run_metadata(str(uuid.uuid4()), str(uuid.uuid4()))
+        profile = b"profile" * 200
+        body, content_type = self.multipart(
+            {"metadata": json.dumps(metadata), "sha256": hashlib.sha256(profile).hexdigest()},
+            {"profile": (metadata["run_id"] + ".profraw", profile)},
+        )
+        status, accepted = self.request("POST", "/api/v1/runs", gzip.compress(body), {
+            "Content-Type": content_type, "Content-Encoding": "gzip",
+            "Authorization": "Bearer " + self.run_upload_token,
+        })
+        self.assertEqual(status, 202, accepted)
+        self.assertEqual(accepted["size"], len(profile))
+        self.assertEqual(accepted["sha256"], hashlib.sha256(profile).hexdigest())
+        stored = self.data_dir / "cycles" / self.cycle_id / "runs" / metadata["run_id"] / "payload.profraw"
+        self.assertEqual(stored.read_bytes(), profile)
+        status, replay = self.upload_run(metadata, profile)
+        self.assertEqual(status, 200, replay)
+        self.assertTrue(replay["idempotent_replay"])
+        changed, changed_type = self.multipart(
+            {"metadata": json.dumps(metadata), "sha256": hashlib.sha256(profile + b"x").hexdigest()},
+            {"profile": (metadata["run_id"] + ".profraw", profile + b"x")},
+        )
+        status, conflict = self.request("POST", "/api/v1/runs", gzip.compress(changed), {
+            "Content-Type": changed_type, "Content-Encoding": "gzip",
+        })
+        self.assertEqual(status, 409, conflict)
+
+    def test_gzip_rejections_do_not_create_runs(self) -> None:
+        """Rejects malformed, trailing, expanded and oversized profiles before durable receipt."""
+
+        metadata = self.run_metadata(str(uuid.uuid4()), str(uuid.uuid4()))
+        profile = b"x" * 2049
+        body, content_type = self.multipart(
+            {"metadata": json.dumps(metadata), "sha256": hashlib.sha256(profile).hexdigest()},
+            {"profile": (metadata["run_id"] + ".profraw", profile)},
+        )
+        encoded = gzip.compress(body)
+        for payload, encoding, expected in [
+            (encoded[:-1], "gzip", 400), (encoded + b"junk", "gzip", 400),
+            (encoded + encoded, "gzip", 400), (b"not-gzip", "gzip", 400),
+            (encoded, "br", 415), (encoded, "gzip", 413),
+            (gzip.compress(b"x" * (1024 * 1024 + 2049)), "gzip", 413),
+        ]:
+            with self.subTest(encoding=encoding, size=len(payload), expected=expected):
+                status, error = self.request("POST", "/api/v1/runs", payload, {
+                    "Content-Type": content_type, "Content-Encoding": encoding,
+                })
+                self.assertEqual(status, expected, error)
+        self.assertFalse((self.data_dir / "cycles" / self.cycle_id / "runs" / metadata["run_id"]).exists())
 
     def test_unknown_build_run_is_pending_then_promoted_by_registration(self) -> None:
         """Confirms unknown Builds retain Runs without claiming analyzability."""

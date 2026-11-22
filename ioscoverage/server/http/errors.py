@@ -125,7 +125,7 @@ class ErrorResponseMixin:
             status = HTTPStatus.UNPROCESSABLE_ENTITY
         elif code == "content_length_required":
             status = HTTPStatus.LENGTH_REQUIRED
-        elif code == "multipart_form_data_required":
+        elif code in ("multipart_form_data_required", "unsupported_content_encoding"):
             status = HTTPStatus.UNSUPPORTED_MEDIA_TYPE
         elif code == "stored_file_missing":
             status = HTTPStatus.INTERNAL_SERVER_ERROR

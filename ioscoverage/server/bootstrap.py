@@ -4,7 +4,6 @@
 import argparse
 import logging
 import secrets
-import signal
 import uuid
 from pathlib import Path
 from typing import Callable, Optional
@@ -27,6 +26,7 @@ from ioscoverage.server.repository_sync import (
     RepositorySyncService,
 )
 from ioscoverage.server.logging import configure_logging, write_log
+from ioscoverage.server.termination import TerminationSignals
 from ioscoverage.storage.analysis_state import AnalysisStateStore, AnalysisStateStoreError
 from ioscoverage.storage.accounts import AccountStore, AccountStoreError
 from ioscoverage.storage.coverage_store import CoverageStore
@@ -63,6 +63,7 @@ def create_server(
     packaging_token: Optional[str] = None,
     enable_repository_sync: bool = True,
     repository_sync_interval_seconds: float = DEFAULT_REPOSITORY_SYNC_INTERVAL_SECONDS,
+    termination_requested: Optional[Callable[[], bool]] = None,
 ) -> ProbeHTTPServer:
     """Creates a server whose mutable paths and projects are startup-fixed."""
 
@@ -153,7 +154,7 @@ def create_server(
         merge_request_coverage_resolver=merge_request_coverage_resolver,
         repository_sync_service=repository_sync_service,
     )
-    return ProbeHTTPServer((host, port), config)
+    return ProbeHTTPServer((host, port), config, termination_requested=termination_requested)
 
 
 def parse_arguments(arguments=None) -> argparse.Namespace:
@@ -169,14 +170,8 @@ def parse_arguments(arguments=None) -> argparse.Namespace:
     return parser.parse_args(arguments)
 
 
-def _handle_termination_signal(_signal_number, _frame) -> None:
-    """Converts SIGTERM into the same coordinated shutdown used by Control-C."""
-
-    raise KeyboardInterrupt
-
-
 def main() -> None:
-    """Loads immutable deployment configuration and starts the LAN service."""
+    """Defers termination during startup/teardown and closes owners before releasing the lease."""
 
     arguments = parse_arguments()
     if not 1 <= arguments.port <= 65535:
@@ -208,52 +203,52 @@ def main() -> None:
     gitlab_client = GitLabMRClient(paths.gitlab_token, registry)
     logger = configure_logging(paths.server_log)
     runtime_lock = RuntimeProcessLock(paths.server_lock)
-    try:
-        runtime_lock.acquire()
-        server = create_server(
-            arguments.host, arguments.port, operator_token, paths, registry,
-            arguments.max_file_mib * 1024 * 1024, logger,
-            arguments.max_run_mib * 1024 * 1024,
-            arguments.max_build_artifact_mib * 1024 * 1024,
-            run_upload_token=run_token, gitlab_mr_client=gitlab_client,
-            packaging_token=packaging_token,
-            runtime_process_lock=runtime_lock, enable_runtime_cleanup=True,
-            anonymous_read=deployment.anonymous_read,
-        )
-    except (ArtifactValidationError, AnalysisStateStoreError, AccountStoreError, ProjectRegistryError, RuntimeLockError) as error:
-        runtime_lock.release()
-        raise SystemExit(getattr(error, "message", str(error)))
-    write_log(logger, "server_started", host=arguments.host, port=server.server_port,
-              runtime_root=str(paths.root), project_count=len(registry.projects),
-              max_probe_bytes=server.config.max_file_bytes,
-              max_run_bytes=server.config.max_run_bytes,
-              max_build_artifact_bytes=server.config.max_build_artifact_bytes,
-              anonymous_read=server.config.anonymous_read,
-              instance_id=server.config.instance_id)
-    print("iOS coverage platform server started", flush=True)
-    print("Listen: http://{}:{}".format(arguments.host, server.server_port), flush=True)
-    print("Anonymous read access (MR coverage): {}".format(
-        "enabled" if server.config.anonymous_read else "disabled (operator Token required)"),
-        flush=True)
-    print("Runtime root: {}".format(paths.root), flush=True)
-    print("Operator token file: {}".format(paths.operator_token), flush=True)
-    print("Packaging token file: {}".format(paths.packaging_token), flush=True)
-    print("Run upload token file: {}".format(paths.run_upload_token), flush=True)
-    print("Projects: {}".format(", ".join(item.project for item in registry.projects)), flush=True)
-    print("Stop: press Control-C", flush=True)
-    previous_sigterm_handler = signal.signal(signal.SIGTERM, _handle_termination_signal)
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        print("\nStopping...", flush=True)
-    finally:
+    with TerminationSignals() as termination:
         try:
-            write_log(logger, "server_stopped", instance_id=server.config.instance_id)
-            server.server_close()
+            runtime_lock.acquire()
+            server = create_server(
+                arguments.host, arguments.port, operator_token, paths, registry,
+                arguments.max_file_mib * 1024 * 1024, logger,
+                arguments.max_run_mib * 1024 * 1024,
+                arguments.max_build_artifact_mib * 1024 * 1024,
+                run_upload_token=run_token, gitlab_mr_client=gitlab_client,
+                packaging_token=packaging_token,
+                runtime_process_lock=runtime_lock, enable_runtime_cleanup=True,
+                anonymous_read=deployment.anonymous_read,
+                termination_requested=lambda: termination.requested,
+            )
+        except (ArtifactValidationError, AnalysisStateStoreError, AccountStoreError, ProjectRegistryError, RuntimeLockError) as error:
             runtime_lock.release()
+            raise SystemExit(getattr(error, "message", str(error)))
+        try:
+            if not termination.requested:
+                write_log(logger, "server_started", host=arguments.host, port=server.server_port,
+                          runtime_root=str(paths.root), project_count=len(registry.projects),
+                          max_probe_bytes=server.config.max_file_bytes,
+                          max_run_bytes=server.config.max_run_bytes,
+                          max_build_artifact_bytes=server.config.max_build_artifact_bytes,
+                          anonymous_read=server.config.anonymous_read,
+                          instance_id=server.config.instance_id)
+                print("iOS coverage platform server started", flush=True)
+                print("Listen: http://{}:{}".format(arguments.host, server.server_port), flush=True)
+                print("Anonymous read access (MR coverage): {}".format(
+                    "enabled" if server.config.anonymous_read else "disabled (operator Token required)"),
+                    flush=True)
+                print("Runtime root: {}".format(paths.root), flush=True)
+                print("Operator token file: {}".format(paths.operator_token), flush=True)
+                print("Packaging token file: {}".format(paths.packaging_token), flush=True)
+                print("Run upload token file: {}".format(paths.run_upload_token), flush=True)
+                print("Projects: {}".format(", ".join(item.project for item in registry.projects)), flush=True)
+                print("Stop: press Control-C", flush=True)
+                server.serve_forever(poll_interval=0.2)
+        except KeyboardInterrupt:
+            termination.requested = True
+            print("\nStopping...", flush=True)
         finally:
-            signal.signal(signal.SIGTERM, previous_sigterm_handler)
+            # Keep TERM/INT deferred while cleanup deletion and worker groups are joined.
+            server.server_close()
+            write_log(logger, "server_stopped", instance_id=server.config.instance_id)
+            runtime_lock.release()
 
 
 if __name__ == "__main__":

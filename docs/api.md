@@ -325,6 +325,19 @@ Run 路径、multipart 字段、metadata schema、状态码、成功响应和幂
 
 `POST /api/v1/runs` 必须恰好包含：文本 `metadata`、文本 `sha256`、文件 `profile`。profile 文件名必须是 `<run_id>.profraw`。
 
+### Run 请求体压缩
+
+新 SDK 在所有网络环境下统一对完整 multipart 请求体使用 gzip（单 member），设置 `Content-Encoding: gzip`，`Content-Length` 为编码后的请求体长度。三个字段、boundary 和解压后 `<run_id>.profraw` 文件名不变；SHA-256 与成功响应 `size` 始终针对原始 profile，gzip / identity 表示不影响 Run 幂等身份。
+
+当前只有本机服务端，先更新服务端再更新 SDK；不增加 `/health` 能力协商或旧服务降级。服务端继续接收未设置编码或 identity 的现有客户端请求，新 SDK 压缩失败则保留原始数据并停止本批，不发送未压缩请求。
+
+Run 鉴权后才读取/解码请求。编码体和解码后整个 multipart 均限制为 `max_run_bytes + 1 MiB`，profile 本身仍受 `max_run_bytes` 限制。服务端增量解压到临时文件并限制每次输出分配；截断、CRC 错误、拼接 member 和尾随垃圾均拒绝，不持久化成功 Run。Transfer-Encoding、重复长度与编码链不被接受。Build/probe 路由不开放 gzip。
+
+- HTTP 415 `unsupported_content_encoding`：编码不支持；客户端保留为可重试并停止本批。
+- HTTP 400 `invalid_compressed_body`：gzip 损坏或不完整；客户端保留为可重试并停止本批，不自动降级或重试。
+- HTTP 400 `incomplete_request`：声明长度的请求体未完整到达；允许使用原 Run 身份有限重试。
+- HTTP 413 `request_too_large`：编码体或解码后的 multipart 超限；原 profile 超限仍为 `file_too_large`。
+
 metadata 的稳定 schema：
 
 ```json
@@ -387,7 +400,7 @@ iOS 上传客户端应按以下规则实现：
 2. 必须核对响应的 `run_id`、`build_id`、`cycle_id`、`sha256`、`size` 均与本地记录一致；任何一项不一致都不能标记本地记录已上传。
 3. HTTP 202 表示服务器已安全保存，但 Build 待注册；本地上传队列可结束该 Run 的网络重试，同时 UI 应提示 Build 未注册。
 4. 网络错误、超时和 5xx 可以用原 metadata 和原 profile 有限重试；不得重新生成 `run_id`。
-5. HTTP 401/403 停止本轮上传并提示 Token；HTTP 409 是永久身份冲突；HTTP 413 是大小配置问题；HTTP 422 表示 size/SHA、Build Git 快照、UUID 或 dSYM ZIP 校验失败，按稳定 `error` 代码处理。
+5. 编码类拒绝按上节保留原始 Run 并停止本批；HTTP 401/403 停止本轮上传并提示 Token；HTTP 409 是永久身份冲突；HTTP 413 是大小配置问题；HTTP 422 表示 size/SHA、Build Git 快照、UUID 或 dSYM ZIP 校验失败，按稳定 `error` 代码处理。
 6. multipart 字段名和 JSON 字段必须严格使用本文件 schema；服务端会拒绝重复、多余和拼错字段。
 
 ## 5. 独立分析状态接口
