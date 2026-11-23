@@ -142,6 +142,59 @@ class MRPresentationTests(unittest.TestCase):
             states, _ = self.project(sha, self.evidence + [dict(build_id=self.evidence[0]['build_id'])])
         self.assertEqual((states['Other.swift'][1], states['File.swift'][8]), ('unknown', 'covered'))
 
+    def test_non_code_changes_without_new_build_are_not_measurable(self):
+        """Documents, Xcode metadata and localization never become untested iOS code."""
+        paths = ('Guide.md', 'App.pbxproj', 'Localizable.strings', 'Podfile', 'Podfile.lock')
+        a = self.commit({path: 'original contents\n' for path in paths})
+        evidence = [self.make_evidence(a, self.original)]
+        sha = self.commit({**{path: 'updated contents\n' for path in paths},
+                           'New.md': 'new documentation\n',
+                           'File.swift': self.original + 'newCode()\n'})
+        states, result = self.project(sha, evidence)
+        for path in (*paths, 'New.md'):
+            self.assertEqual(states[path], {1: 'not_measurable'}, path)
+            detail = next(detail for detail in result['details'].values()
+                          if detail['file']['repo_relative_path'] == path)
+            self.assertEqual(detail['file']['uncovered'], 0)
+            self.assertEqual(detail['lines'][0]['coverage_source'], 'none')
+        self.assertEqual(states['File.swift'][14], 'uncovered')
+        self.assertEqual(result['summary']['covered'], 13)
+        self.assertEqual(result['summary']['uncovered'], 1)
+        self.assertEqual(result['summary']['not_measurable'], 6)
+        self.assertIsNone(result['summary']['changed_line_coverage_percent'])
+
+    def test_non_code_classification_does_not_require_historical_mapping(self):
+        """A known document type stays gray even when historical evidence is unavailable."""
+        sha = self.commit({'Guide.md': 'updated documentation\n', 'Other.swift': 'newCode()\n'})
+        broken = [dict(build_id=self.evidence[0]['build_id'])]
+        states, result = self.project(sha, broken)
+        self.assertEqual(states['Guide.md'][1], 'not_measurable')
+        self.assertEqual(states['Other.swift'][1], 'unknown')
+        self.assertTrue(result['retryable'])
+
+    def test_unrecognized_file_types_still_require_coverage_evidence(self):
+        """An unrecognized suffix or an iOS source file cannot be assumed unmeasurable."""
+        paths = ('Other.swift', 'Other.m', 'Other.mm', 'Other.c', 'Other.cpp', 'Other.h',
+                 'Other.custom', 'Guide.md.swift')
+        sha = self.commit({path: 'newCode()\n' for path in paths})
+        states, _ = self.project(sha)
+        for path in paths:
+            self.assertEqual(states[path], {1: 'uncovered'}, path)
+
+    def test_unreadable_document_source_remains_unknown(self):
+        """A file-type classification does not hide failure to read the current snapshot."""
+        sha = self.commit({'Guide.md': 'updated documentation\n'})
+        original = self.repository.source
+        def source(commit, path):
+            if path == 'Guide.md':
+                raise ValueError('unavailable')
+            return original(commit, path)
+        with patch.object(self.repository, 'source', side_effect=source):
+            states, result = self.project(sha)
+        self.assertEqual(states['Guide.md'][1], 'unknown')
+        self.assertEqual(states['File.swift'][8], 'covered')
+        self.assertTrue(result['retryable'])
+
     def test_existing_complete_published_line_can_retain_mixed_region_evidence(self):
         """A previously complete mixed-source line remains green when its own bytes survive."""
         partial = self.make_evidence(self.a, self.original, misses=(8,))

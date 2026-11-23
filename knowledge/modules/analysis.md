@@ -16,6 +16,7 @@ No HTTP parsing, Run upload, schema migration, Token handling, Git checkout/work
 - `mapping/coverage_export.py`: llvm-cov region normalization.
 - `mapping/source_region.py`: exact Git line/range inheritance evidence for formal reports.
 - `mr_presentation.py`, `mapping/mr_lines.py`: read-only current-MR display mapping, separate from formal region inheritance; see `workflows/coverage_report.md`.
+- `mapping/file_classification.py`: explicit MR-only non-instrumented file classification for Markdown (`.md`), Xcode project metadata (`.pbxproj`), localization (`.strings`) and CocoaPods manifests (`Podfile`, `Podfile.lock`). Other paths retain existing evidence-based decisions; missing LLVM evidence alone is not a file-type classification.
 - `orchestrator.py`: `CycleAnalysisOrchestrator` snapshot selection and stage coordination; missing/untested-current selection also refreshes independent Build evidence without publishing a formal Cycle success.
 - `scheduler.py`: single generation worker and shutdown coordination.
 - `process_orchestrator.py` / `process_worker.py`: production-only, terminable process-group boundary around the unchanged Cycle orchestrator.

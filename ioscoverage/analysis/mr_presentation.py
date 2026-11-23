@@ -12,6 +12,7 @@ from ioscoverage.analysis.mapping.source_region import (
     SourceRegionMappingError, build_file_line_mapping, select_file_diff,
 )
 from ioscoverage.analysis.mapping.mr_lines import verified_line_mapping
+from ioscoverage.analysis.mapping.file_classification import is_non_instrumented_file
 from ioscoverage.integrations.git_repository import GitRepositoryError
 
 LOCAL_ERRORS = (CoverageStoreError, GitRepositoryError, GitDiffParseError, SourceRegionMappingError, CoverageExportError,
@@ -88,13 +89,16 @@ class MergeRequestPresentation:
             try:
                 current = self.repository.source(diff["head_sha"], path)
                 current_lines = current.splitlines()
-                decisions = [self._file_evidence(path, current, entry) for entry in prepared]
+                non_instrumented = is_non_instrumented_file(path)
+                decisions = [] if non_instrumented else [self._file_evidence(path, current, entry) for entry in prepared]
                 for number in changed.changed_new_lines:
                     if not 0 < number <= len(current_lines):
                         raise ValueError("current range")
                     options = [self._line_evidence(number, decision) for decision in decisions]
                     hit = next((value for value in options if value["state"] == "covered"), None)
-                    if hit is not None:
+                    if non_instrumented:
+                        decision = {"state": "not_measurable", "reason": "non_instrumented_file_type"}
+                    elif hit is not None:
                         decision = hit
                     elif any(value["state"] == "unknown" for value in options):
                         decision = {"state": "unknown", "reason": "mapping_or_evidence_unavailable"}

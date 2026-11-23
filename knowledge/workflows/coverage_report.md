@@ -1,5 +1,7 @@
 # Coverage report workflow
 
+In the mapped schema-2 MR projection, readable changed Markdown (`.md`), Xcode project (`.pbxproj`), localization (`.strings`) and CocoaPods manifest (`Podfile`, `Podfile.lock`) lines are `not_measurable`, based on the explicit policy in `mapping/file_classification.py`. This classification requires no new Build and takes precedence over missing or ambiguous historical mappings. Unreadable current source remains unknown. Other file types still require the existing evidence rules, so new executable code without applicable hits stays uncovered. Formal report decisions, denominators and the strict-match path are unchanged.
+
 1. **Entry:** `/login/` is the account entry, `/cycles/` is the Session-gated workbench, and `/cycles/<cycle_id>` plus report JSON endpoints remain the report entry. When `anonymous_read` is enabled, the resolver, report, and report-file endpoints used by the browser extension are served without a credential; otherwise they require any valid platform principal. The browser UI uses HttpOnly Session and never stores machine Tokens.
 2. **Call chain:** page route -> web shell; browser -> analysis/report API -> `CoverageReportStore`.
 3. **Persistence:** none. The store derives fixed result directories from latest-success identities and validates completion/file SHA before projection.
