@@ -1,5 +1,6 @@
     let loadedCycles = [];
     let createdCycle = null;
+    let copyStatusTimer = null;
 
     async function api(path, options={}) {
       const response = await fetch(path, Object.assign({cache:'no-store',credentials:'same-origin'}, options));
@@ -27,6 +28,37 @@
       const cell = document.createElement('td'); cell.textContent = value == null ? '—' : String(value); row.append(cell); return cell;
     }
 
+    async function copyText(text) {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        try { await navigator.clipboard.writeText(text); return; } catch (_) { /* Try the HTTP-compatible path below. */ }
+      }
+      // LAN HTTP pages do not expose the Clipboard API; copy a selected temporary field instead.
+      const field = document.createElement('textarea'); field.value = text; field.readOnly = true;
+      field.style.position = 'fixed'; field.style.left = '-9999px'; field.style.top = '0';
+      const focused = document.activeElement;
+      document.body.append(field);
+      try {
+        field.focus({preventScroll:true}); field.select();
+        if (!document.execCommand('copy')) throw new Error('copy_failed');
+      } finally {
+        field.remove();
+        if (focused) focused.focus({preventScroll:true});
+      }
+    }
+
+    async function copyCycleID(id) {
+      const status = document.getElementById('copy-status');
+      try {
+        await copyText(id);
+        status.className = 'status-message'; status.textContent = `已复制 Cycle ID：${id}`;
+      } catch (_) {
+        status.className = 'status-message error'; status.textContent = `复制失败，请手动复制 Cycle ID：${id}`;
+      }
+      status.hidden = false;
+      clearTimeout(copyStatusTimer);
+      copyStatusTimer = setTimeout(() => { status.hidden = true; }, status.classList.contains('error') ? 8000 : 3000);
+    }
+
     function renderCycles(cycles) {
       const body = document.getElementById('cycle-rows'); body.replaceChildren();
       document.getElementById('empty').hidden = cycles.length !== 0;
@@ -44,7 +76,7 @@
         const idCell = addCell(row, ''); const idCode = document.createElement('code'); idCode.textContent = cycle.id; idCell.append(idCode);
         const actionCell = document.createElement('td'); actionCell.className = 'actions';
         const open = document.createElement('button'); open.type = 'button'; open.textContent = '查看报告'; open.addEventListener('click', () => { location.assign(`/cycles/${encodeURIComponent(cycle.id)}`); });
-        const copy = document.createElement('button'); copy.type = 'button'; copy.className = 'secondary'; copy.textContent = '复制 ID'; copy.addEventListener('click', () => navigator.clipboard.writeText(cycle.id));
+        const copy = document.createElement('button'); copy.type = 'button'; copy.className = 'secondary'; copy.textContent = '复制 ID'; copy.addEventListener('click', () => copyCycleID(cycle.id));
         actionCell.append(open, copy); row.append(actionCell); body.append(row);
       }
     }
@@ -96,6 +128,6 @@
     document.getElementById('refresh').addEventListener('click', () => loadCycles().catch(showRequestError));
     document.getElementById('project-filter').addEventListener('change', event => renderCycles(event.target.value ? loadedCycles.filter(c => c.project === event.target.value) : loadedCycles));
     document.getElementById('create-form').addEventListener('submit', createCycle);
-    document.getElementById('copy-created-cycle').addEventListener('click', () => { if (createdCycle) navigator.clipboard.writeText(createdCycle.id); });
+    document.getElementById('copy-created-cycle').addEventListener('click', () => { if (createdCycle) copyCycleID(createdCycle.id); });
     document.getElementById('open-created-report').addEventListener('click', () => { if (createdCycle) location.assign(`/cycles/${encodeURIComponent(createdCycle.id)}`); });
     api('/api/v1/auth/session').then(payload => { showAuthenticated(payload.user); return loadCycles(); }).catch(showRequestError);
