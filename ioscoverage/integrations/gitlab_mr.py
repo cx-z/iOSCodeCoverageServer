@@ -92,6 +92,12 @@ class GitLabMRClient:
 
         if not isinstance(version_id, str) or re.fullmatch(r"[1-9][0-9]{0,18}", version_id) is None:
             raise GitLabMRClientError("invalid_page_version", "page diff version is invalid", 400)
+        version = self.fetch_latest_version(mr_url)
+        return version["diff"] if version["id"] == version_id else None
+
+    def fetch_latest_version(self, mr_url: object):
+        """Reads the latest registered MR diff identity for the standalone Cycle page."""
+
         normalized = normalize_mr_url(mr_url, self.project_registry)
         definition = normalized.project
         request = Request(
@@ -111,10 +117,12 @@ class GitLabMRClient:
         if not isinstance(payload, list) or not payload or not isinstance(payload[0], dict):
             raise GitLabMRClientError("gitlab_invalid_response", "GitLab version identity is invalid", 502)
         payload = payload[0]
-        if str(payload.get("id")) != version_id:
-            return None
-        return {name + "_sha": self._required_sha(payload, name + "_commit_sha")
-                for name in ("base", "start", "head")}
+        version_id = str(payload.get("id"))
+        if re.fullmatch(r"[1-9][0-9]{0,18}", version_id) is None:
+            raise GitLabMRClientError("gitlab_invalid_response", "GitLab version identity is invalid", 502)
+        return {"id": version_id, "diff": {
+            name + "_sha": self._required_sha(payload, name + "_commit_sha")
+            for name in ("base", "start", "head")}}
 
     def _load_token(self) -> str:
         try:

@@ -548,6 +548,10 @@ class CoverageReportHTTPTests(unittest.TestCase):
             analysis_state_store=self.fixture.state_store,
             analysis_scheduler=None,
             report_store=self.fixture.store,
+            merge_request_coverage_resolver=SimpleNamespace(
+                resolve_cycle_presentation=lambda cycle, **params: {
+                    "cycle_id": cycle, "params": params, "projection": {"files": []}}
+            ),
         )
         self.server = ProbeHTTPServer(("127.0.0.1", 0), config)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -597,6 +601,23 @@ class CoverageReportHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(json.loads(body)["lines"]), 5)
         self.assertEqual(self._request("GET", prefix + "..%2F..%2Fetc%2Fpasswd", token=self.token)[0], 404)
+
+    def test_cycle_presentation_uses_report_auth_and_strict_detail_identity(self):
+        """The new read-only entrypoint permits only an empty query or one bound detail."""
+
+        path = "/api/v1/cycles/{}/mr-presentation".format(self.fixture.cycle_id)
+        self.assertEqual(self._request("GET", path)[0], 200 if self.anonymous_read else 401)
+        self.assertEqual(self._request("GET", path, token="wrong-token")[0], 401)
+        status, _, body = self._request("GET", path, token=self.token)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["cycle_id"], self.fixture.cycle_id)
+        query = "?page_version=123&presentation_id=" + "a"*64 + "&file_id=" + "b"*64
+        status, _, body = self._request("GET", path + query, token=self.token)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["params"]["page_version"], "123")
+        for query in ("?mr_url=other", "?file_id=" + "b"*64,
+                      query + "&page_version=124", query.replace("123", "../1")):
+            self.assertEqual(self._request("GET", path + query, token=self.token)[0], 400)
 
     def test_analysis_status_exposes_refresh_timestamps(self):
         """Provides request/start/completion times for automatic browser refresh."""

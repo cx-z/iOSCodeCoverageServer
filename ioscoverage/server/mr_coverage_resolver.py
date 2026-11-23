@@ -151,6 +151,72 @@ class MergeRequestCoverageResolver:
             report_document,
         )
 
+    def resolve_cycle_presentation(self, cycle_id, page_version=None, presentation_id=None, file_id=None):
+        """Reuses MR snapshots for a known Cycle without advancing any stored identity."""
+
+        cycle = self.coverage_store.get_cycle(cycle_id)
+        mr_url = cycle.get("mr_url")
+        if not mr_url:
+            if file_id is not None:
+                raise CoverageReportError("presentation_expired", "MR presentation must be refreshed")
+            report = self.report_store.get_report(cycle_id)
+            return {"schema_version": 2, "status": "build_report", "can_annotate": True,
+                    "cycle": {"id": cycle_id}, "analysis": None, "mr": None,
+                    "report": report, "page_version": None, "presentation_id": None,
+                    "projection": {"strict_match": True, "summary": report["summary"], "files": report["files"]}}
+        if file_id is not None:
+            detail = self.resolve_presentation(mr_url, page_version, presentation_id, file_id)
+            if detail["cycle_id"] != cycle_id:
+                raise CoverageReportError("presentation_expired", "MR presentation must be refreshed")
+            return detail
+        result = self.resolve(mr_url)
+        if result["cycle"] is not None and result["cycle"]["id"] != cycle_id:
+            raise CoverageReportError("report_identity_mismatch", "MR belongs to another Cycle")
+        if result["report"] is None:
+            if result["cycle"] is not None:
+                version = self.gitlab_client.fetch_latest_version(mr_url)
+                return self._project_cycle_diff(mr_url, cycle, result, version)
+            return {**result, "schema_version": 2, "page_version": None,
+                    "presentation_id": None, "projection": None}
+        version = self.gitlab_client.fetch_latest_version(mr_url)
+        return self._project_presentation(mr_url, version["id"], result, version["diff"])
+
+    def _project_cycle_diff(self, mr_url, cycle, result, version):
+        """Issues a Cycle-only source snapshot without fabricating a Build or coverage report."""
+
+        result = {**result, "schema_version": 2, "page_version": version["id"],
+                  "presentation_id": None, "projection": None}
+        if version["diff"] != result["mr"]["diff"]:
+            result.update(status="page_version_unverified", can_annotate=False)
+            return result
+        normalized = normalize_mr_url(mr_url, self.gitlab_client.project_registry)
+        scope = (normalized.project.project, str(normalized.iid), version["id"])
+        cycle_id = str(cycle["id"])
+        generation = result["analysis"]["completed_generation"]
+        identity = {"version": "cycle-diff-only/1", "scope": scope, "cycle_id": cycle_id,
+                    "diff": version["diff"], "generation": generation}
+        key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+        def create_snapshot():
+            """Uses the existing fixed-Git projector with no Build evidence or published decisions."""
+
+            definition = normalized.project
+            repository = self.gitlab_client.project_registry.repository(definition.project)
+            try:
+                snapshot = MergeRequestPresentation(repository, definition, self.coverage_store).project(
+                    cycle_id, version["diff"], [])
+            except LOCAL_ERRORS as error:
+                raise CoverageReportError("mr_data_unavailable", "Current MR Git data is unavailable") from error
+            return {**snapshot, "cycle_id": cycle_id, "generation": generation, "strict_match": False}
+
+        presentation_id, snapshot = self._cached_presentation(key, scope, create_snapshot)
+        result.update(status="diff_only", can_annotate=True, should_poll=True,
+                      presentation_id=presentation_id, build_count=cycle.get("build_count"),
+                      projection=copy.deepcopy({field: snapshot[field] for field in ("files", "summary", "strict_match")}),
+                      notice=("尚无构建包" if cycle.get("build_count") == 0 else "尚无成功构建报告")
+                             + "；当前仅展示 MR diff，暂无覆盖率数据。")
+        return result
+
     def resolve_presentation(self, mr_url, page_version, presentation_id=None, file_id=None):
         """Negotiates schema 2; schema 1 retains its original strict-SHA behavior."""
 
@@ -168,13 +234,21 @@ class MergeRequestCoverageResolver:
                     "cycle_id": snapshot["cycle_id"], "mr_iid": scope[1], "generation": snapshot["generation"],
                     **copy.deepcopy(snapshot["details"][file_id])}
         result = self.resolve(mr_url)
+        page_diff = (self.gitlab_client.fetch_version_refs(mr_url, page_version)
+                     if result["report"] is not None else None)
+        return self._project_presentation(mr_url, page_version, result, page_diff)
+
+    def _project_presentation(self, mr_url, page_version, result, page_diff):
+        """Shares version/ref verification, mapping and cache between both page entrypoints."""
+
+        normalized = normalize_mr_url(mr_url, self.gitlab_client.project_registry)
+        scope = (normalized.project.project, str(normalized.iid), page_version)
         result["schema_version"] = 2
         result["page_version"] = page_version
         result["presentation_id"] = None
         result["projection"] = None
         if result["report"] is None:
             return result
-        page_diff = self.gitlab_client.fetch_version_refs(mr_url, page_version)
         if page_diff != result["mr"]["diff"]:
             result.update(status="page_version_unverified", can_annotate=False)
             return result
@@ -184,7 +258,7 @@ class MergeRequestCoverageResolver:
         if any(report.get(field) != reference.get(field) for field in ("generation", "current_build_id", "updated_at")):
             raise CoverageReportError("report_identity_mismatch", "Report changed during MR resolution")
         independent = self.report_store.get_mr_evidence_references(cycle_id, report)
-        identity = {"version": "mr-lines/4", "scope": scope, "cycle_id": cycle_id, "diff": page_diff,
+        identity = {"version": "mr-lines/5", "scope": scope, "cycle_id": cycle_id, "diff": page_diff,
                     "generation": report["generation"], "build_id": report["current_build_id"],
                     "orchestration": report["orchestration_input_sha256"], "inputs": report["cycle_input_set_sha256"],
                     "independent_evidence": independent}

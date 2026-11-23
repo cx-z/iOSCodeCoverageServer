@@ -157,6 +157,8 @@ class MRPresentationTests(unittest.TestCase):
                           if detail['file']['repo_relative_path'] == path)
             self.assertEqual(detail['file']['uncovered'], 0)
             self.assertEqual(detail['lines'][0]['coverage_source'], 'none')
+            self.assertEqual(detail['lines'][0]['source_text'],
+                             'new documentation' if path == 'New.md' else 'updated contents')
         self.assertEqual(states['File.swift'][14], 'uncovered')
         self.assertEqual(result['summary']['covered'], 13)
         self.assertEqual(result['summary']['uncovered'], 1)

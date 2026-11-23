@@ -2,7 +2,7 @@
 
 代码定位见 [报告工作流](../knowledge/workflows/coverage_report.md) 和 [Web 模块](../knowledge/modules/web.md)。
 
-Mac 服务提供一个低依赖、只读的 Cycle 报告页。它只展示后台最新成功 generation 已引用的、`complete.json` 完整性校验通过的累计结果，不运行 LLVM，也不修改 SQLite 或分析结果。
+Mac 服务提供一个低依赖、只读的 Cycle 报告页。它展示最新 MR diff，并复用 GitLab 插件已有的逐行覆盖投影；证据仍来自完整性校验通过的构建结果，不运行 LLVM，也不修改 SQLite 或正式分析结果。没有关联 MR 的历史 Cycle 保持原构建报告视图。
 
 完整的日常提测顺序见 [iOS 真机覆盖率日常使用](daily_workflow.md)。
 
@@ -22,13 +22,15 @@ http://127.0.0.1:8765/login/
 
 ## 页面能力
 
-- 每 2 秒查询一次后台分析状态，展示 queued/running/succeeded/failed 与请求、开始或完成时间；
-- 展示 covered、uncovered、not_measurable、unknown 和可测量覆盖率；
+- 每 2 秒刷新报告视图；管理员额外查询后台分析状态，展示 queued/running/succeeded/failed 与请求、开始、完成时间，构建报告发布时间单独保留；
+- 展示最新 MR 的 covered、uncovered、not_measurable、unknown；非严格匹配投影无编译分母，可测量覆盖率显示为 `—`；正式构建报告的提交、Build、百分比和发布时间单独标注；
 - 按精确仓库相对路径列出变更文件，并展示逐文件四类计数；
 - 点击文件查看 Git 新侧变更行、行号、源码文本、状态和覆盖来源；
 - 覆盖来源区分 `当前 Build`、`历史继承`、`当前 + 历史` 和无来源；未完全覆盖的行会明确标为“部分 region”，避免把一个正数外层 region 误解为整行已覆盖；
 - “只看未覆盖代码”同时过滤文件和当前文件明细；
-- queued/running/failed 时仍展示上一次 latest success，不把部分或失败结果冒充新报告。
+- queued/running/failed 时仍可使用已验证的构建证据；MR 关闭、合并、版本暂未确认或 GitLab 不可用时，独立读取并展示最近成功的正式构建报告和行详情，明确提示当前不是最新 MR diff；后续 MR 恢复可用时自动切回投影。正式报告也不存在或完整性校验失败时显示错误。
+
+尚未构建安装包的 Cycle 也可以查看已验证最新 MR 的文件和新侧源码行，页面提示“尚无构建包；当前仅展示 MR diff，暂无覆盖率数据”。已有包但尚无成功报告时使用对应提示，并继续显示排队/分析/失败状态。此模式无正式报告和构建发布时间，覆盖率显示 `—`，不会凭空标记已覆盖；Markdown 等明确不可插桩文件仍标记不可测量。首次成功报告发布后，页面自动切换到正常证据投影。
 
 若整包 LLVM 代码区域因源码路径无法可靠映射而分析失败，页面显示失败状态并继续读取符合当前 diff refs 的旧成功报告；不会把这类失败渲染成全部 `not_measurable`。无编译器区域的真实不可测文件仍沿用原状态。
 
@@ -38,13 +40,14 @@ analysis 状态要求 admin Session或 operator；report/file 在 `anonymous_rea
 
 ```text
 GET /api/v1/cycles/<cycle_id>/analysis
+GET /api/v1/cycles/<cycle_id>/mr-presentation
 GET /api/v1/cycles/<cycle_id>/report
 GET /api/v1/cycles/<cycle_id>/report/files/<file_id>
 ```
 
 `file_id` 是服务端对已验证仓库相对路径计算的 SHA-256，不是路径。请求方不能传本机文件路径、Git SHA、Build、Run、仓库、命令或输出目录。服务端从 SQLite latest success 的不可变 identity 推导固定 `analysis/cycle-latest` 与 `analysis/cycle-coverage` 目录，并校验两个结果目录的完整输出集合、size 和 SHA-256 后才返回数据。绝对路径、`..`、符号链接、未知来源类型、篡改或缺失完成标记都会被拒绝。
 
-报告 API 不返回 Mach-O/dSYM/profraw 路径、内部命令、Token 或任意文件内容。源码文本仅来自既有累计报告中已经固定的 Git 新侧变更行。
+报告 API 不返回 Mach-O/dSYM/profraw 路径、内部命令、Token 或任意文件内容。正式报告源码仍来自既有累计报告；MR 投影源码来自已验证最新 diff 的固定 head，新侧行与摘要绑定同一个 presentation ID。页面每次刷新会检查该身份，generation 不变时也能跟随 MR 更新；过期详情会等待当前刷新或重新解析，并自动重试原文件一次；即使服务重启后重建的投影 ID 相同也不丢失点击。更新的文件点击优先，旧请求不会覆盖新投影。
 
 GitLab MR 页面上的只读浏览器扩展先调用：
 
@@ -52,13 +55,13 @@ GitLab MR 页面上的只读浏览器扩展先调用：
 POST /api/v1/integrations/gitlab/merge-request-coverage/resolve
 ```
 
-服务端用已有 GitLab PAT 获取当前 MR 的完整 diff refs，并要求 latest success 的 current Build 满足 `merge_base_sha/base_sha`、`target_sha_at_build/start_sha`、`git_sha/head_sha` 三组完全相等。只有响应 `can_annotate=true` 时，扩展才能继续按 `summary_api` 和既有 file API 映射 `repo_relative_path + new_line_number`。任一 SHA 不同即为 `stale_diff`，不能按 head-only、路径、源码文本或行号猜测。
+服务端 schema 2 验证扩展页面选择的 diff ID 和实际行三 SHA，再将独立构建证据映射到该版本。Cycle 页面通过 `/mr-presentation` 入口由服务端发现最新版本，复用相同的验证、投影和缓存；文件详情携带摘要的 `page_version + presentation_id + file_id`。Markdown 等明确的不可插桩文件不要求新包即可显示为“不可测量”。正式 `/report` 与 `/report/files/…` 仍保留原构建口径。
 
 resolver 的读取同样由 `anonymous_read` 控制；它只接受 MR 页面 URL，不创建 Cycle、不触发分析、不修改报告，也不向浏览器暴露 GitLab PAT 或本机路径。完整响应与状态语义见 [HTTP API](api.md#6-gitlab-mr-coverage-只读解析)。
 
 Cycle 列表还调用 `GET /api/v1/cycles`；创建表单调用 `POST /api/v1/cycles`。developer/admin 使用同源 Session，服务端而非前端实施数据隔离；operator 仅保留兼容路径。
 
-当前 Build 删除的文件和删除行不属于 Git 新侧分母，因此不会继续出现在文件列表。内部不可变分析证据可能保留历史提交的 patch/source 文本以证明跨 Build 映射；这些审计文件不进入报告 JSON 或页面，也不能通过 file API 读取。
+当前显示 diff 删除的文件和删除行不属于 Git 新侧分母，因此不会继续出现在文件列表。内部不可变分析证据可能保留历史提交的 patch/source 文本以证明跨 Build 映射；这些审计文件不进入报告 JSON 或页面，也不能通过 file API 读取。
 
 ## 当前边界
 

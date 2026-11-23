@@ -10,6 +10,7 @@ from ioscoverage.storage.reports import CoverageReportError
 from tests.server import test_gitlab_coverage_resolver as resolver_fixtures
 MR_URL = resolver_fixtures.MR_URL
 from tests.web.test_report_ui import ReportFixture
+from tests.analysis import test_mr_presentation as mapping_fixtures
 
 
 class PresentationProtocolTests(unittest.TestCase):
@@ -30,6 +31,9 @@ class PresentationProtocolTests(unittest.TestCase):
         self.f.report_store.get_mr_report_snapshot = lambda cycle, report: dict(self.snapshot)
         self.f.report_store.get_mr_evidence_references = lambda cycle, report: []
         self.f.report_store.get_mr_evidence = lambda cycle, report, independent=(): []
+        self.f.report_store.report['files'] = []
+        self.f.coverage.get_cycle = lambda cycle: {**self.f.coverage.cycle, 'mr_url': MR_URL}
+        self.f.gitlab.fetch_latest_version = lambda url: {'id': '123', 'diff': dict(self.page_diff)}
 
     def tearDown(self):
         """Removes temporary fixture state."""
@@ -80,6 +84,128 @@ class PresentationProtocolTests(unittest.TestCase):
         self.assertEqual(detail['presentation_id'], result['presentation_id'])
         self.f.coverage.build['git_sha'] = 'd'*40
         self.assertFalse(self.f.resolver.resolve(MR_URL)['can_annotate'])
+
+    def test_cycle_and_extension_share_the_same_immutable_presentation(self):
+        """Both entrypoints issue the same summary/details while formal state stays fixed."""
+        self.f.coverage.build['git_sha'] = 'd' * 40
+        before = json.dumps(self.f.report_store.report, sort_keys=True)
+        with patch('ioscoverage.server.mr_coverage_resolver.MergeRequestPresentation.project',
+                   return_value=self._cache_snapshot()):
+            cycle = self.f.resolver.resolve_cycle_presentation(self.f.cycle_id)
+            extension = self.f.resolver.resolve_presentation(MR_URL, '123')
+        self.assertEqual(cycle, extension)
+        self.assertFalse(cycle['projection']['strict_match'])
+        self.assertIsNone(cycle['projection']['summary']['changed_line_coverage_percent'])
+        detail = self.f.resolver.resolve_cycle_presentation(
+            self.f.cycle_id, '123', cycle['presentation_id'], self.file_id)
+        self.assertEqual(detail['lines'][0]['state'], 'covered')
+        self.assertEqual(before, json.dumps(self.f.report_store.report, sort_keys=True))
+
+    def test_cycle_latest_markdown_commit_reuses_old_build_hits_and_source(self):
+        """Real Git and LLVM evidence expose unbuilt docs without changing the formal report."""
+        mapping = mapping_fixtures.MRPresentationTests()
+        mapping.setUp()
+        self.addCleanup(mapping.tearDown)
+        mapping.cycle = self.f.cycle_id
+        evidence = mapping.make_evidence(mapping.a, mapping.original)
+        latest = mapping.commit({'Guide.md': '# Latest documentation\n'})
+        self.f.gitlab.project_registry = resolver_fixtures.project_registry(
+            mapping.root, host='git.example.com', project_path='mobile/example-app')
+        self.f.gitlab.merge_request = replace(self.f.gitlab.merge_request,
+            base_sha=mapping.base, start_sha=mapping.base, head_sha=latest)
+        self.page_diff.update(base_sha=mapping.base, start_sha=mapping.base, head_sha=latest)
+        self.f.coverage.build.update(git_sha=mapping.a, merge_base_sha=mapping.base,
+                                     target_sha_at_build=mapping.base)
+        self.f.coverage.get_build = lambda key: (self.f.coverage.build if key == self.f.build_id
+                                                else mapping.builds[key])
+        self.f.report_store.get_mr_evidence = lambda *args: [evidence]
+        self.f.report_store.get_mr_report_snapshot = lambda *args: {'files': [], 'details': {}}
+        before = json.dumps(self.f.report_store.report, sort_keys=True)
+        result = self.f.resolver.resolve_cycle_presentation(self.f.cycle_id)
+        self.assertEqual(result['projection']['summary']['covered'], 13)
+        self.assertEqual(result['projection']['summary']['not_measurable'], 1)
+        file = next(item for item in result['projection']['files'] if item['repo_relative_path'] == 'Guide.md')
+        detail = self.f.resolver.resolve_cycle_presentation(
+            self.f.cycle_id, result['page_version'], result['presentation_id'], file['file_id'])
+        self.assertEqual(detail['lines'][0]['source_text'], '# Latest documentation')
+        self.assertEqual(detail['lines'][0]['state'], 'not_measurable')
+        self.assertEqual(before, json.dumps(self.f.report_store.report, sort_keys=True))
+
+    def test_cycle_without_builds_exposes_verified_diff_without_creating_report(self):
+        """Real fixed Git serves unbuilt source while formal/extension report gates stay intact."""
+        mapping = mapping_fixtures.MRPresentationTests()
+        mapping.setUp()
+        self.addCleanup(mapping.tearDown)
+        latest = mapping.commit({'Guide.md': '# Unbuilt documentation\n'})
+        self.f.gitlab.project_registry = resolver_fixtures.project_registry(
+            mapping.root, host='git.example.com', project_path='mobile/example-app')
+        self.f.gitlab.merge_request = replace(self.f.gitlab.merge_request,
+            base_sha=mapping.base, start_sha=mapping.base, head_sha=latest)
+        self.page_diff.update(base_sha=mapping.base, start_sha=mapping.base, head_sha=latest)
+        self.f.state_store.state.update(status='idle', latest_success_generation=None,
+                                       requested_generation=0, completed_generation=0)
+        self.f.coverage.get_cycle = lambda cycle: {**self.f.coverage.cycle, 'mr_url': MR_URL, 'build_count': 0}
+        before = json.dumps(self.f.state_store.state, sort_keys=True)
+        with patch.object(self.f.report_store, 'get_report', side_effect=AssertionError('no report read')):
+            result = self.f.resolver.resolve_cycle_presentation(self.f.cycle_id)
+            self.assertEqual(result['status'], 'diff_only')
+            self.assertIsNone(result['report'])
+            self.assertEqual(result['build_count'], 0)
+            self.assertIn('尚无构建包', result['notice'])
+            self.assertEqual(result['projection']['summary']['covered'], 0)
+            self.assertEqual(result['projection']['summary']['uncovered'], 13)
+            self.assertEqual(result['projection']['summary']['not_measurable'], 1)
+            self.assertIsNone(result['projection']['summary']['changed_line_coverage_percent'])
+            for file in result['projection']['files']:
+                detail = self.f.resolver.resolve_cycle_presentation(
+                    self.f.cycle_id, result['page_version'], result['presentation_id'], file['file_id'])
+                self.assertTrue(all(line.get('source_text') for line in detail['lines']))
+                self.assertTrue(all(line['state'] != 'covered' for line in detail['lines']))
+            self.assertFalse(self.f.resolver.resolve(MR_URL)['can_annotate'])
+            self.assertIsNone(self.f.resolver.resolve_presentation(MR_URL, '123')['projection'])
+        self.assertEqual(before, json.dumps(self.f.state_store.state, sort_keys=True))
+
+    def test_diff_only_still_verifies_version_and_distinguishes_pending_builds(self):
+        """No report cannot bypass full refs or claim an existing Build is absent."""
+        self.f.state_store.state.update(status='running', latest_success_generation=None)
+        self.f.coverage.get_cycle = lambda cycle: {**self.f.coverage.cycle, 'mr_url': MR_URL, 'build_count': 1}
+        with patch('ioscoverage.server.mr_coverage_resolver.MergeRequestPresentation.project',
+                   return_value=self._cache_snapshot()):
+            result = self.f.resolver.resolve_cycle_presentation(self.f.cycle_id)
+        self.assertIn('尚无成功构建报告', result['notice'])
+        self.assertEqual(result['analysis']['status'], 'running')
+        self.page_diff['head_sha'] = 'e'*40
+        result = self.f.resolver.resolve_cycle_presentation(self.f.cycle_id)
+        self.assertFalse(result['can_annotate'])
+        self.assertIsNone(result['projection'])
+        self.assertEqual(result['status'], 'page_version_unverified')
+
+    def test_cycle_version_race_no_report_and_expired_details_fail_closed(self):
+        """A moving MR or missing report cannot expose old data as the latest projection."""
+        self.page_diff['head_sha'] = 'e' * 40
+        result = self.f.resolver.resolve_cycle_presentation(self.f.cycle_id)
+        self.assertEqual(result['status'], 'page_version_unverified')
+        self.assertIsNone(result['projection'])
+        with self.assertRaises(CoverageReportError) as raised:
+            self.f.resolver.resolve_cycle_presentation(self.f.cycle_id, '123', '0'*64, self.file_id)
+        self.assertEqual(raised.exception.code, 'presentation_expired')
+        self.f.state_store.state['latest_success_generation'] = None
+        self.assertIsNone(self.f.resolver.resolve_cycle_presentation(self.f.cycle_id)['projection'])
+
+    def test_cycle_without_mr_keeps_formal_report_view(self):
+        """Legacy non-MR Cycles retain the existing report and file endpoint semantics."""
+        self.f.coverage.get_cycle = lambda cycle: dict(self.f.coverage.cycle)
+        result = self.f.resolver.resolve_cycle_presentation(self.f.cycle_id)
+        self.assertEqual(result['status'], 'build_report')
+        self.assertEqual(result['report'], self.f.report_store.report)
+        self.assertIsNone(result['presentation_id'])
+
+    def test_cycle_details_cannot_cross_cycle_identity(self):
+        """Even a valid MR snapshot is rejected under another Cycle URL."""
+        result = self.f.resolver.resolve_cycle_presentation(self.f.cycle_id)
+        with self.assertRaises(CoverageReportError) as raised:
+            self.f.resolver.resolve_cycle_presentation('other-cycle', '123', result['presentation_id'], self.file_id)
+        self.assertEqual(raised.exception.code, 'presentation_expired')
 
     def _cache_snapshot(self, degraded=False):
         """Builds contrasting complete results for the same target/evidence identities."""

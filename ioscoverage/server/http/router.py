@@ -124,6 +124,11 @@ class ProbeRequestHandler(
                 return
             self._handle_report_get(report_match.group(1))
             return
+        presentation_match = re.fullmatch(r"/api/v1/cycles/([^/]+)/mr-presentation", path)
+        if presentation_match:
+            if self._authorize_read():
+                self._handle_cycle_presentation_get(presentation_match.group(1))
+            return
         cycle_match = re.fullmatch(r"/api/v1/cycles/([^/]+)", path)
         if cycle_match:
             principal = self._require_any_scope("web_user", "operator", "packaging")

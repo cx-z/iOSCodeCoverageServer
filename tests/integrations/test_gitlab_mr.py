@@ -201,12 +201,19 @@ class GitLabMRClientTests(unittest.TestCase):
         self.assertEqual(client.fetch_version_refs(url, "123"), self.payload["diff_refs"])
         self.assertEqual(calls, [("https://git.example.com/api/v4/projects/mobile%2Fexample-app/merge_requests/42/versions?per_page=1", "GET")])
         self.assertIsNone(client.fetch_version_refs(url, "122"))
+        self.assertEqual(client.fetch_latest_version(url),
+                         {"id": "123", "diff": self.payload["diff_refs"]})
         for invalid in (None, 123, "../1", "1?x=2", "0"):
             with self.assertRaises(GitLabMRClientError):
                 client.fetch_version_refs(url, invalid)
         payload[0]["head_commit_sha"] = "invalid"
         with self.assertRaises(GitLabMRClientError):
             client.fetch_version_refs(url, "123")
+        payload[0]["head_commit_sha"] = "c"*40
+        for invalid in (None, True, 0, "../1", "1?x=2"):
+            payload[0]["id"] = invalid
+            with self.subTest(version=invalid), self.assertRaises(GitLabMRClientError):
+                client.fetch_latest_version(url)
 
 
 if __name__ == "__main__":

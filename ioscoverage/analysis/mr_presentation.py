@@ -108,7 +108,8 @@ class MergeRequestPresentation:
                         decision = {"state": "not_measurable", "reason": "unchanged_compiler_classification"}
                     else:
                         decision = {"state": "uncovered", "reason": "no_applicable_complete_hit"}
-                    lines.append({"new_line_number": number, "regions": [], "coverage_source": "none", **decision})
+                    lines.append({"new_line_number": number, "source_text": current_lines[number - 1],
+                                  "regions": [], "coverage_source": "none", **decision})
             except LOCAL_ERRORS:
                 self.retryable = True
                 lines = [{"new_line_number": number, "state": "unknown", "coverage_source": "none",
