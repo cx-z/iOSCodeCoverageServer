@@ -1,6 +1,7 @@
 """Read-only current-MR projection from independent, verified Build evidence."""
 
 import hashlib
+import copy
 from collections import Counter
 
 from ioscoverage.analysis.diff.git_diff_parser import GitDiffParseError, parse_name_status_z, parse_unified_zero_patch
@@ -13,6 +14,8 @@ from ioscoverage.analysis.mapping.source_region import (
 )
 from ioscoverage.analysis.mapping.mr_lines import verified_line_mapping
 from ioscoverage.analysis.mapping.file_classification import is_non_instrumented_file
+from ioscoverage.analysis.mapping.source_comments import supports_comment_classification
+from ioscoverage.analysis.mapping.source_non_executable import non_executable_lines
 from ioscoverage.integrations.git_repository import GitRepositoryError
 
 LOCAL_ERRORS = (CoverageStoreError, GitRepositoryError, GitDiffParseError, SourceRegionMappingError, CoverageExportError,
@@ -28,6 +31,46 @@ def counts(lines, *, coverage_available):
     return {"changed_new_side": len(lines), **{state: states[state] for state in STATES},
             "measurable": measurable,
             "changed_line_coverage_percent": states["covered"] / measurable * 100 if measurable else None}
+
+
+def exclude_snapshot_non_executable(snapshot, source_loader):
+    """Excludes proven configuration/resource data and syntax-only lines from strict MR display.
+
+    Formal reports stay immutable. Full fixed source supplies lexical context;
+    missing source leaves the verified report decision intact and permits retry.
+    """
+
+    result = copy.deepcopy(snapshot)
+    changed = False
+    for file in result["files"]:
+        non_instrumented = is_non_instrumented_file(file["repo_relative_path"])
+        if not non_instrumented and not supports_comment_classification(file["repo_relative_path"]):
+            continue
+        detail = result["details"][file["file_id"]]
+        try:
+            source = source_loader(file["repo_relative_path"])
+            excluded = non_executable_lines(file["repo_relative_path"], source)
+        except LOCAL_ERRORS:
+            result["retryable"] = True
+            continue
+        file_changed = False
+        for line in detail["lines"]:
+            reason = "non_instrumented_file_type" if non_instrumented else excluded.get(line["new_line_number"])
+            if reason:
+                line.update(state="not_measurable", reason=reason, regions=[], coverage_source="none")
+                line.pop("evidence", None)
+                file_changed = changed = True
+        if file_changed:
+            file.update(counts(detail["lines"], coverage_available=True))
+            detail["file"] = file
+    if changed:
+        lines = [line for detail in result["details"].values() for line in detail["lines"]]
+        result["summary"] = {**result["summary"], **counts(lines, coverage_available=True)}
+        if "covered_with_inherited_evidence" in result["summary"]:
+            result["summary"]["covered_with_inherited_evidence"] = sum(
+                line["state"] == "covered" and line["coverage_source"] in ("historical_inheritance", "mixed")
+                for line in lines)
+    return result
 
 
 class MergeRequestPresentation:
@@ -93,6 +136,7 @@ class MergeRequestPresentation:
                 current = self.repository.source(diff["head_sha"], path)
                 current_lines = current.splitlines()
                 non_instrumented = is_non_instrumented_file(path)
+                excluded = non_executable_lines(path, current)
                 decisions = [] if non_instrumented else [self._file_evidence(path, current, entry) for entry in prepared]
                 for number in changed.changed_new_lines:
                     if not 0 < number <= len(current_lines):
@@ -101,6 +145,8 @@ class MergeRequestPresentation:
                     hit = next((value for value in options if value["state"] == "covered"), None)
                     if non_instrumented:
                         decision = {"state": "not_measurable", "reason": "non_instrumented_file_type"}
+                    elif number in excluded:
+                        decision = {"state": "not_measurable", "reason": excluded[number]}
                     elif hit is not None:
                         decision = hit
                     elif any(value["state"] == "unknown" for value in options):

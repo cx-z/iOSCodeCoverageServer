@@ -9,7 +9,7 @@ import copy
 from concurrent.futures import Future
 from collections import OrderedDict
 
-from ioscoverage.analysis.mr_presentation import MergeRequestPresentation, LOCAL_ERRORS
+from ioscoverage.analysis.mr_presentation import MergeRequestPresentation, exclude_snapshot_non_executable, LOCAL_ERRORS
 from typing import Dict, Mapping, Optional
 
 from ioscoverage.integrations.gitlab_mr import (
@@ -193,7 +193,7 @@ class MergeRequestCoverageResolver:
         scope = (normalized.project.project, str(normalized.iid), version["id"])
         cycle_id = str(cycle["id"])
         generation = result["analysis"]["completed_generation"]
-        identity = {"version": "cycle-diff-only/1", "scope": scope, "cycle_id": cycle_id,
+        identity = {"version": "cycle-diff-only/6", "scope": scope, "cycle_id": cycle_id,
                     "diff": version["diff"], "generation": generation}
         key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
 
@@ -272,7 +272,7 @@ class MergeRequestCoverageResolver:
         if any(report.get(field) != reference.get(field) for field in ("generation", "current_build_id", "updated_at")):
             raise CoverageReportError("report_identity_mismatch", "Report changed during MR resolution")
         independent = self.report_store.get_mr_evidence_references(cycle_id, report)
-        identity = {"version": "mr-lines/6", "scope": scope, "cycle_id": cycle_id, "diff": page_diff,
+        identity = {"version": "mr-lines/11", "scope": scope, "cycle_id": cycle_id, "diff": page_diff,
                     "generation": report["generation"], "build_id": report["current_build_id"],
                     "orchestration": report["orchestration_input_sha256"], "inputs": report["cycle_input_set_sha256"],
                     "independent_evidence": independent}
@@ -283,6 +283,9 @@ class MergeRequestCoverageResolver:
             strict = page_diff == reference["build_diff"] and not independent
             if strict:
                 snapshot = self.report_store.get_mr_report_snapshot(cycle_id, report)
+                if snapshot["files"]:
+                    repository = self.gitlab_client.project_registry.repository(normalized.project.project)
+                    snapshot = exclude_snapshot_non_executable(snapshot, lambda path: repository.source(page_diff["head_sha"], path))
             else:
                 definition = normalized.project
                 repository = self.gitlab_client.project_registry.repository(definition.project)

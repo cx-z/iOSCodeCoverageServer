@@ -201,6 +201,46 @@ class PresentationProtocolTests(unittest.TestCase):
                 self.assertIn('accepted', completed.stdout)
                 self.assertEqual(cycle, self.f.resolver.resolve_cycle_presentation(self.f.cycle_id))
 
+    def test_strict_mr_comments_are_excluded_in_both_consumers_and_bound_details(self):
+        """Exact Build refs still exclude comments without rewriting formal report evidence."""
+        mapping = mapping_fixtures.MRPresentationTests()
+        mapping.setUp()
+        self.addCleanup(mapping.tearDown)
+        latest = mapping.commit({'File.swift': 'execute_01()\n/// documentation\nexecute_03()\n'})
+        self.f.gitlab.project_registry = resolver_fixtures.project_registry(
+            mapping.root, host='git.example.com', project_path='mobile/example-app')
+        self.f.gitlab.merge_request = replace(self.f.gitlab.merge_request,
+            base_sha=mapping.base, start_sha=mapping.base, head_sha=latest)
+        self.page_diff.update(base_sha=mapping.base, start_sha=mapping.base, head_sha=latest)
+        self.f.coverage.build.update(git_sha=latest, merge_base_sha=mapping.base,
+                                    target_sha_at_build=mapping.base)
+        lines = [{'new_line_number': n, 'state': 'covered' if n != 2 else 'uncovered',
+                  'coverage_source': 'current_build', 'regions': [{'covered': n != 2}]}
+                 for n in range(1, 4)]
+        summary = counts(lines, coverage_available=True)
+        file = {'file_id': self.file_id, 'repo_relative_path': 'File.swift', **summary}
+        self.snapshot = {'files': [file], 'summary': summary,
+                         'details': {self.file_id: {'file': file, 'lines': lines}}}
+        self.f.report_store.report['summary'] = dict(summary)
+        before = json.dumps(self.f.report_store.report, sort_keys=True)
+        cycle = self.f.resolver.resolve_cycle_presentation(self.f.cycle_id)
+        extension = self.f.resolver.resolve_presentation(MR_URL, '123')
+        self.assertTrue(cycle['projection']['strict_match'])
+        self.assertEqual(cycle, extension)
+        self.assertEqual(cycle['projection']['summary']['measurable'], 2)
+        self.assertEqual(cycle['projection']['summary']['uncovered'], 0)
+        self.assertEqual(cycle['projection']['summary']['not_measurable'], 1)
+        self.assertEqual(cycle['projection']['summary']['changed_line_coverage_percent'], 100)
+        for read in (lambda: self.f.resolver.resolve_cycle_presentation(
+                         self.f.cycle_id, '123', cycle['presentation_id'], self.file_id),
+                     lambda: self.f.resolver.resolve_presentation(
+                         MR_URL, '123', extension['presentation_id'], self.file_id)):
+            detail = read()
+            self.assertEqual(detail['file'], cycle['projection']['files'][0])
+            self.assertEqual(detail['lines'][1]['state'], 'not_measurable')
+        self.assertEqual(before, json.dumps(self.f.report_store.report, sort_keys=True))
+        self.assertEqual(self.snapshot['summary']['measurable'], 3)
+
     def test_cycle_without_builds_exposes_verified_diff_without_creating_report(self):
         """Real fixed Git serves unbuilt source while formal/extension report gates stay intact."""
         mapping = mapping_fixtures.MRPresentationTests()

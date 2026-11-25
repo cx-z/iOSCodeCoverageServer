@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from ioscoverage.analysis.mr_presentation import MergeRequestPresentation, counts
+from ioscoverage.analysis.mr_presentation import MergeRequestPresentation, counts, exclude_snapshot_non_executable
 from ioscoverage.integrations.git_repository import GitRepository
 
 
@@ -305,3 +305,118 @@ class MRPresentationTests(unittest.TestCase):
         current = self.commit({})
         states, _ = self.project(current,evidence)
         self.assertTrue(all(state=='unknown' for state in states['Renamed.swift'].values()))
+
+    def test_comment_only_changes_are_unmeasurable_with_or_without_build_evidence(self):
+        """New/edited line and block comments never enter the MR coverage denominator."""
+        source = '/// Updated documentation\n/* Block\n body\n */\n' + self.original + 'newCode() // executable\n'
+        sha = self.commit({'File.swift': source})
+        for evidence in ([], self.evidence, [dict(build_id=self.evidence[0]['build_id'])]):
+            with self.subTest(evidence=bool(evidence)):
+                states, result = self.project(sha, evidence)
+                self.assertTrue(all(states['File.swift'][n] == 'not_measurable' for n in range(1, 5)))
+                file = next(f for f in result['files'] if f['repo_relative_path'] == 'File.swift')
+                self.assertEqual(file['not_measurable'], 4)
+                self.assertEqual(file, result['details'][file['file_id']]['file'])
+                if evidence is self.evidence:
+                    self.assertEqual(result['summary']['covered'], 13)
+                    self.assertEqual(result['summary']['uncovered'], 1)
+                    self.assertEqual(result['summary']['measurable'], 14)
+                    self.assertAlmostEqual(result['summary']['changed_line_coverage_percent'], 13 / 14 * 100)
+                elif not evidence:
+                    self.assertEqual(states['File.swift'][18], 'uncovered')
+                    self.assertIsNone(result['summary']['changed_line_coverage_percent'])
+
+    def test_comments_inside_measured_region_override_compiler_hit(self):
+        """A compiler region spanning a comment cannot make that comment measurable."""
+        source = 'execute_01()\n/// documentation\nexecute_03()\n'
+        sha = self.commit({'File.swift': source})
+        evidence = [self.make_evidence(sha, source)]
+        states, result = self.project(sha, evidence)
+        self.assertEqual(states['File.swift'], {1: 'covered', 2: 'not_measurable', 3: 'covered'})
+        self.assertEqual(result['summary']['measurable'], 2)
+        self.assertEqual(result['summary']['changed_line_coverage_percent'], 100)
+
+    def test_strict_snapshot_excludes_comments_without_mutating_formal_report(self):
+        """An existing Build's MR presentation excludes comments and binds matching file counts."""
+        source = 'execute_01()\n/// documentation\nexecute_03()\n'
+        lines = [{'new_line_number': n, 'state': 'covered', 'coverage_source': 'current_build',
+                  'regions': [{'covered': True}]} for n in range(1, 4)]
+        summary = counts(lines, coverage_available=True)
+        file = {'file_id': 'f'*64, 'repo_relative_path': 'File.swift', **summary}
+        snapshot = {'files': [file], 'summary': summary, 'details': {file['file_id']: {'file': file, 'lines': lines}}}
+        result = exclude_snapshot_non_executable(snapshot, lambda path: source)
+        self.assertEqual(snapshot['summary']['measurable'], 3)
+        self.assertEqual(snapshot['details'][file['file_id']]['lines'][1]['state'], 'covered')
+        self.assertEqual(result['summary']['measurable'], 2)
+        self.assertEqual(result['summary']['not_measurable'], 1)
+        self.assertEqual(result['files'][0], result['details'][file['file_id']]['file'])
+        self.assertEqual(result['details'][file['file_id']]['lines'][1]['regions'], [])
+
+
+    def test_configuration_resources_and_source_syntax_need_no_new_build(self):
+        """Real Git changes exclude data/metadata while retaining old hits and new statements."""
+        paths = ('Info.plist', 'config.json', 'Build.xcconfig', 'App.entitlements',
+                 'PrivacyInfo.xcprivacy', 'Main.storyboard', 'Panel.xib', 'theme.svg',
+                 'Assets.xcassets/Icon.imageset/Contents.json',
+                 'Model.xcdatamodeld/Version.xcdatamodel/contents')
+        for path in paths:
+            (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+        source = 'import Foundation\n\nstruct Feature {\n func run() {\n' + self.original + 'newCall()\n }\n}\n'
+        sha = self.commit({'File.swift': source, **{path: 'resource data\n' for path in paths}})
+        for evidence in ([], self.evidence, [dict(build_id=self.evidence[0]['build_id'])]):
+            with self.subTest(evidence=bool(evidence)):
+                states, result = self.project(sha, evidence)
+                for path in paths:
+                    self.assertEqual(states[path], {1: 'not_measurable'}, path)
+                self.assertEqual([states['File.swift'][n] for n in (1, 2, 3, 4, 19, 20)], ['not_measurable'] * 6)
+                self.assertEqual(result['summary']['not_measurable'], len(paths) + 6)
+                for file in result['files']:
+                    self.assertEqual(file, result['details'][file['file_id']]['file'])
+                if evidence is self.evidence:
+                    self.assertEqual(states['File.swift'][18], 'uncovered')
+                    self.assertEqual(result['summary']['covered'], 13)
+                    self.assertEqual(result['summary']['uncovered'], 1)
+                    self.assertEqual(result['summary']['measurable'], 14)
+                    self.assertAlmostEqual(result['summary']['changed_line_coverage_percent'], 13 / 14 * 100)
+                elif not evidence:
+                    self.assertEqual(result['summary']['uncovered'], 14)
+                    self.assertIsNone(result['summary']['changed_line_coverage_percent'])
+
+    def test_strict_snapshot_uses_same_data_and_source_exclusions(self):
+        """Strict Build snapshots keep file counts and details aligned without changing stored data."""
+        sources = {'File.swift': 'import Foundation\n\nstruct Feature {\n let value = make()\n}\n',
+                   'Info.plist': '<plist/>\n', 'config.json': '{}\n', 'Icon.svg': '<svg/>\n'}
+        files, details, all_lines = [], {}, []
+        for index, (path, source) in enumerate(sources.items()):
+            lines = [{'new_line_number': n, 'state': 'uncovered', 'coverage_source': 'none',
+                      'regions': [{'covered': False}]} for n in range(1, len(source.splitlines()) + 1)]
+            file = {'file_id': str(index) * 64, 'repo_relative_path': path, **counts(lines, coverage_available=True)}
+            files.append(file)
+            details[file['file_id']] = {'file': file, 'lines': lines}
+            all_lines.extend(lines)
+        snapshot = {'files': files, 'details': details, 'summary': counts(all_lines, coverage_available=True)}
+        result = exclude_snapshot_non_executable(snapshot, sources.__getitem__)
+        self.assertEqual(snapshot['summary']['uncovered'], 8)
+        self.assertEqual(result['summary']['uncovered'], 1)
+        self.assertEqual(result['summary']['measurable'], 1)
+        self.assertEqual(result['summary']['not_measurable'], 7)
+        for file in result['files']:
+            self.assertEqual(file, result['details'][file['file_id']]['file'])
+
+    def test_executable_resources_and_unreadable_data_are_not_hidden(self):
+        """Resource folder names do not hide scripts/shaders; failed data reads remain unknown."""
+        paths = ('Resources/Script.js', 'Resources/Feature.swift', 'Resources/Kernel.metal')
+        for path in paths:
+            (self.root / path).parent.mkdir(parents=True, exist_ok=True)
+        sha = self.commit({**{path: 'run()\n' for path in paths}, 'config.json': '{}\n'})
+        source = self.repository.source
+        def read(commit, path):
+            """Makes one fixed configuration blob unavailable without changing other sources."""
+            if path == 'config.json':
+                raise ValueError('unavailable')
+            return source(commit, path)
+        with patch.object(self.repository, 'source', side_effect=read):
+            states, _ = self.project(sha, [])
+        for path in paths:
+            self.assertEqual(states[path], {1: 'uncovered'})
+        self.assertEqual(states['config.json'], {1: 'unknown'})

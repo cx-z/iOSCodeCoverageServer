@@ -483,6 +483,14 @@ schema 2 直接验证收到的状态组合：关闭/不存在 MR、无报告或�
 
 schema 1 的请求、严格匹配和 `stale_diff` 行为保持不变。新扩展发送 schema 2；旧服务拒绝时失败关闭，不降级套用旧报告。旧扩展的 schema-1 严格校验继续有效。正式 `/report`、`/report/files/…` 接口语义不变；Cycle 页面改用下述最新 MR 投影读取入口。
 
+MR 展示不依赖当前或历史 Build 即可将以下已确认非执行内容归为 `not_measurable`，排除出可测分母：
+
+- 配置/项目数据：`.plist`、`.json`、`.xcconfig`、entitlements/privacy、Xcode 与依赖元数据、已有 Markdown/本地化格式。
+- 资源数据：asset catalog 的 JSON 清单、图片/SVG/PDF、字体、音视频、界面 `.xib/.storyboard`、数据模型及已登记的文本数据格式；二进制 diff 没有逐行分母。完整匹配列表由 `analysis/mapping/file_classification.py` 维护，资源目录中的可执行脚本/Swift/Metal 等不会仅因目录名而被排除。
+- Swift/C-family 源码：纯注释、空白、独立结构分隔符、导入与编译指令、已证明的纯类型/声明及跨行签名。分析使用完整固定 Git 源码和字符串/正则字面量上下文。
+
+包含运行时初始化、默认参数求值、构造函数执行、VLA 长度求值、单目转换表达式、内联函数体、立即调用闭包、switch 分支或其他可执行内容的行继续按覆盖证据判定；声明后同一物理行仍有语句时不得仅凭声明前缀排除。C 行拼接先按逻辑源码识别，再映射回原物理行号；多行 Objective-C selector、Swift 关联值类型、换行返回类型及合法枚举原始值按其声明上下文识别。无法证明的语法不会猜测排除。严格匹配 Build 的 MR 展示采用相同排除规则，摘要与文件详情同口径；正式存档报告保持不可变。
+
 ### Cycle 页面的最新 MR diff
 
 ```text
