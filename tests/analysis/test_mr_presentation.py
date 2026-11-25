@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-from ioscoverage.analysis.mr_presentation import MergeRequestPresentation
+from ioscoverage.analysis.mr_presentation import MergeRequestPresentation, counts
 from ioscoverage.integrations.git_repository import GitRepository
 
 
@@ -88,17 +88,22 @@ class MRPresentationTests(unittest.TestCase):
         self.assertEqual(self.project(sha)[0]['File.swift'][8], 'covered')
 
     def test_P04_P12_P17_moving_lines_and_changed_scope(self):
-        """Handles insertion, deletion, rebased scope and display counts without a percentage."""
+        """Recomputes the current MR ratio across insertion, deletion and rebased scope."""
         sha = self.commit({'File.swift': 'inserted()\n' + self.original})
         states, result = self.project(sha)
         self.assertEqual((states['File.swift'][1], states['File.swift'][9]), ('uncovered', 'covered'))
         self.assertEqual(result['summary']['covered'], 13)
-        self.assertIsNone(result['summary']['changed_line_coverage_percent'])
+        self.assertEqual(result['summary']['measurable'], 14)
+        self.assertAlmostEqual(result['summary']['changed_line_coverage_percent'], 13 / 14 * 100)
+        self.assertEqual(result['files'][0]['changed_line_coverage_percent'],
+                         result['summary']['changed_line_coverage_percent'])
         sha = self.commit({'File.swift': ''.join(self.original.splitlines(keepends=True)[2:])})
         self.assertEqual(self.project(sha)[1]['summary']['changed_new_side'], 11)
         self.assertTrue(all(state == 'covered' for state in self.project(sha)[0]['File.swift'].values()))
         # A newer target baseline changes the MR range, not evidence identity.
-        self.assertEqual(self.project(sha, base=self.a)[1]['summary']['changed_new_side'], 0)
+        empty = self.project(sha, base=self.a)[1]['summary']
+        self.assertEqual(empty['changed_new_side'], 0)
+        self.assertIsNone(empty['changed_line_coverage_percent'])
 
     def test_P06_copy_and_duplicate_ambiguity(self):
         """Copied files remain red, indistinguishable repetitions become unknown."""
@@ -163,7 +168,25 @@ class MRPresentationTests(unittest.TestCase):
         self.assertEqual(result['summary']['covered'], 13)
         self.assertEqual(result['summary']['uncovered'], 1)
         self.assertEqual(result['summary']['not_measurable'], 6)
-        self.assertIsNone(result['summary']['changed_line_coverage_percent'])
+        self.assertEqual(result['summary']['measurable'], 14)
+        self.assertAlmostEqual(result['summary']['changed_line_coverage_percent'], 13 / 14 * 100)
+        document = next(file for file in result['files'] if file['repo_relative_path'] == 'Guide.md')
+        self.assertIsNone(document['changed_line_coverage_percent'])
+
+    def test_coverage_ratio_excludes_unknown_and_non_measurable_lines(self):
+        """Only covered/uncovered states enter the ratio; zero/no-report stays absent."""
+        for states, available, measurable, percent in (
+            (['covered', 'uncovered', 'not_measurable', 'unknown'], True, 2, 50),
+            (['uncovered'], True, 1, 0),
+            (['covered'], True, 1, 100),
+            (['not_measurable', 'unknown'], True, 0, None),
+            ([], True, 0, None),
+            (['uncovered', 'not_measurable'], False, 0, None),
+        ):
+            with self.subTest(states=states, available=available):
+                summary = counts([{'state': state} for state in states], coverage_available=available)
+                self.assertEqual(summary['measurable'], measurable)
+                self.assertEqual(summary['changed_line_coverage_percent'], percent)
 
     def test_non_code_classification_does_not_require_historical_mapping(self):
         """A known document type stays gray even when historical evidence is unavailable."""

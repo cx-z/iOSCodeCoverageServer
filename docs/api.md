@@ -473,7 +473,7 @@ GET /api/v1/cycles/<cycle_id>/report/files/<file_id>
 
 响应保留下面 schema-1 文档中的 `mr/cycle/analysis/report` 来源信息，但 `schema_version` 为 2，另有 `page_version`、`presentation_id` 和 `projection`。`report` 始终描述正式构建报告；实际 MR 数量与文件列表来自 `projection: {strict_match, summary, files}`。无报告时两项新结果为 null；版本不符返回 `page_version_unverified`、`can_annotate:false`、空投影。必要 Git 数据失败返回有界错误，不伪造全红。单文件或部分证据异常降级为对应未知，其他完整命中仍可用。
 
-`strict_match:true` 表示直接使用正式报告结果与百分比；三 SHA 相同但有尚未纳入正式报告的独立证据时，也会返回 `strict_match:false` 的 MR 投影。投影时 `summary` 提供 `changed_new_side/covered/uncovered/not_measurable/unknown` 分类数量，`changed_line_coverage_percent:null`，兼容形状中的 `measurable:0` 不是当前 MR 的编译分母。`files` 使用精确 `repo_relative_path`、SHA-256 `file_id` 和同口径分类数量。旧报告百分比不得作为 MR 百分比展示。
+`strict_match:true` 表示直接使用正式报告结果与百分比；三 SHA 相同但有尚未纳入正式报告的独立证据时，也会返回 `strict_match:false` 的 MR 投影。为兼容已有 schema-2 扩展，非严格匹配的 POST 响应只提供 `changed_new_side/covered/uncovered/not_measurable/unknown` 分类数量，摘要与文件描述均保持 `measurable:0`、`changed_line_coverage_percent:null`，文件详情的 `file` 与摘要一致。旧报告百分比不得作为 MR 百分比展示。Cycle GET 入口的百分比规则见下文。
 
 详情请求在同一摘要请求的三个字段外增加 `presentation_id` 和 `file_id`，两者均为服务端签发的 64 位小写十六进制身份。详情响应为 `{schema_version:2, presentation_id, page_version, cycle_id, mr_iid, generation, file, lines}`。行含 `new_line_number/state/coverage_source/regions`，绿色可附 `evidence:{build_id,git_sha,input_set_sha256,export_sha256,reported_at?}`（可用时提供来源分析的报告时间，独立证据不冒用旧正式报告时间）；红色统一未覆盖。同一逻辑输入只执行一份并发计算，签发的 presentation ID 同时绑定完整结果内容。瞬时数据故障在 15 秒后可重算，恢复后的不同内容使用新 ID，旧 ID 的摘要/详情保持一致。缓存最多保留八份不可变投影，失效返回 HTTP 409 `presentation_expired`，客户端须重新解析，不能退回旧行号。
 
@@ -492,7 +492,7 @@ GET /api/v1/cycles/<cycle_id>/mr-presentation?page_version=<id>&presentation_id=
 
 鉴权沿用 report 的只读边界（`anonymous_read=true` 时允许匿名，否则要求有效身份；无效 Bearer 始终拒绝）。摘要请求不接受 query；详情必须恰好提供上述三个参数各一次。Cycle 关联的 MR URL 由服务端读取，浏览器不能指定 Git SHA、MR URL、仓库或文件路径。
 
-摘要返回与 schema 2 相同的投影形状。服务端发现最新 GitLab diff ID，并验证其完整三 SHA 与当前 MR 一致后，复用现有投影和缓存。详情按同一 Cycle 和已签发的不可变身份读取；过期返回 `presentation_expired`，必须重新取摘要。映射行额外提供固定目标提交的 `source_text`，源码不可读时保持 unknown。正式报告内容、时间、百分比和编译分母不随此读取改变；MR 投影无编译分母时百分比仍为 null。没有关联 MR 的历史 Cycle 返回 `status:build_report`、空 MR/投影 ID 和正式报告投影，其详情继续使用原 report/file API。Cycle 浏览器遇到关闭/已合并 MR、无法验证的 MR 版本或 GitLab/网络故障时，也会独立调用正式 `/report` 与 file API 保留构建报告浏览，并明确标注当前不是最新 MR diff；该浏览器回退不改变 MR resolver 的拒绝标注语义或正式报告口径。
+摘要返回与 schema 2 相同的投影形状；Cycle GET 保留当前 MR 比例，扩展 POST 的非严格匹配摘要与详情在输出边界保持旧版分类口径，转换仅作用于请求副本，不修改共享缓存、presentation ID 或逐行证据。服务端发现最新 GitLab diff ID，并验证其完整三 SHA 与当前 MR 一致后，复用现有投影和缓存。详情按同一 Cycle 和已签发的不可变身份读取；过期返回 `presentation_expired`，必须重新取摘要。映射行额外提供固定目标提交的 `source_text`，源码不可读时保持 unknown。正式报告内容、时间、百分比和编译分母不随此读取改变；有成功报告的 MR 投影按当前 `covered / (covered + uncovered)` 计算百分比，分母为 0 时为 null。没有关联 MR 的历史 Cycle 返回 `status:build_report`、空 MR/投影 ID 和正式报告投影，其详情继续使用原 report/file API。Cycle 浏览器遇到关闭/已合并 MR、无法验证的 MR 版本或 GitLab/网络故障时，也会独立调用正式 `/report` 与 file API 保留构建报告浏览，并明确标注当前不是最新 MR diff；该浏览器回退不改变 MR resolver 的拒绝标注语义或正式报告口径。
 
 Cycle GET 入口在 MR 有效但尚无成功构建报告时，可返回 `status: "diff_only"`、`report: null`、`build_count`、`notice` 和已验证的不可变 `projection/presentation_id/page_version`。此时复用固定 Git 投影但不提供任何构建证据；已知不可插桩文件为 `not_measurable`，其他可读变更行无命中证据，覆盖率为 null。浏览器提示“尚无构建包”或“尚无成功构建报告”，文件详情仍携带签发的同一组身份。正式 `/report` 继续返回 `report_not_available`；扩展 POST 的 schema 1/2 仍要求成功报告，不受此 Cycle 页面能力扩展影响。
 

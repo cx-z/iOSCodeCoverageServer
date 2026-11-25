@@ -20,12 +20,14 @@ LOCAL_ERRORS = (CoverageStoreError, GitRepositoryError, GitDiffParseError, Sourc
 STATES = ("covered", "uncovered", "not_measurable", "unknown")
 
 
-def counts(lines):
-    """Counts presentation categories without inventing a compiled denominator."""
+def counts(lines, *, coverage_available):
+    """Counts MR states and derives coverage without reusing a Build denominator."""
 
     states = Counter(line["state"] for line in lines)
+    measurable = states["covered"] + states["uncovered"] if coverage_available else 0
     return {"changed_new_side": len(lines), **{state: states[state] for state in STATES},
-            "measurable": 0, "changed_line_coverage_percent": None}
+            "measurable": measurable,
+            "changed_line_coverage_percent": states["covered"] / measurable * 100 if measurable else None}
 
 
 class MergeRequestPresentation:
@@ -39,6 +41,7 @@ class MergeRequestPresentation:
     def project(self, cycle_id, diff, evidence, published=None):
         """Maps each independent Build directly to current code, never via the last MR."""
 
+        coverage_available = bool(evidence) or published is not None
         self.repository.validate_build_snapshot(diff["head_sha"], diff["start_sha"], diff["base_sha"])
         self.retryable = False
         self.rename_checks = {}
@@ -115,11 +118,13 @@ class MergeRequestPresentation:
                 lines = [{"new_line_number": number, "state": "unknown", "coverage_source": "none",
                           "regions": [], "reason": "file_data_unavailable"} for number in changed.changed_new_lines]
             file_id = hashlib.sha256(path.encode()).hexdigest()
-            descriptor = {"file_id": file_id, "repo_relative_path": path, **counts(lines)}
+            descriptor = {"file_id": file_id, "repo_relative_path": path,
+                          **counts(lines, coverage_available=coverage_available)}
             files.append(descriptor)
             details[file_id] = {"file": descriptor, "lines": lines}
         all_lines = [line for detail in details.values() for line in detail["lines"]]
-        return {"files": files, "summary": counts(all_lines), "details": details, "retryable": self.retryable}
+        return {"files": files, "summary": counts(all_lines, coverage_available=coverage_available),
+                "details": details, "retryable": self.retryable}
 
     def _diff(self, old_sha, new_sha):
         """Parses only the registry repository's deterministic fixed-object diff."""

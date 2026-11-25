@@ -1,11 +1,16 @@
 """Presentation identity, protocol compatibility, and completion-protected evidence."""
 import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
 import unittest
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from unittest.mock import patch
+from ioscoverage.analysis.mr_presentation import counts
 from ioscoverage.storage.reports import CoverageReportError
 from tests.server import test_gitlab_coverage_resolver as resolver_fixtures
 MR_URL = resolver_fixtures.MR_URL
@@ -86,19 +91,28 @@ class PresentationProtocolTests(unittest.TestCase):
         self.assertFalse(self.f.resolver.resolve(MR_URL)['can_annotate'])
 
     def test_cycle_and_extension_share_the_same_immutable_presentation(self):
-        """Both entrypoints issue the same summary/details while formal state stays fixed."""
+        """Consumers share immutable line evidence but retain their own summary contracts."""
         self.f.coverage.build['git_sha'] = 'd' * 40
         before = json.dumps(self.f.report_store.report, sort_keys=True)
         with patch('ioscoverage.server.mr_coverage_resolver.MergeRequestPresentation.project',
                    return_value=self._cache_snapshot()):
             cycle = self.f.resolver.resolve_cycle_presentation(self.f.cycle_id)
             extension = self.f.resolver.resolve_presentation(MR_URL, '123')
-        self.assertEqual(cycle, extension)
+        self.assertEqual(cycle['presentation_id'], extension['presentation_id'])
+        self.assertEqual(cycle['report'], extension['report'])
+        self.assertEqual(extension['projection']['summary']['measurable'], 0)
+        self.assertIsNone(extension['projection']['summary']['changed_line_coverage_percent'])
         self.assertFalse(cycle['projection']['strict_match'])
-        self.assertIsNone(cycle['projection']['summary']['changed_line_coverage_percent'])
+        self.assertAlmostEqual(cycle['projection']['summary']['changed_line_coverage_percent'], 12 / 13 * 100)
         detail = self.f.resolver.resolve_cycle_presentation(
             self.f.cycle_id, '123', cycle['presentation_id'], self.file_id)
         self.assertEqual(detail['lines'][0]['state'], 'covered')
+        self.assertEqual(detail['file'], cycle['projection']['files'][0])
+        extension_detail = self.f.resolver.resolve_presentation(
+            MR_URL, '123', extension['presentation_id'], self.file_id)
+        self.assertEqual(extension_detail['file'], extension['projection']['files'][0])
+        self.assertEqual(extension_detail['lines'], detail['lines'])
+        self.assertEqual(cycle, self.f.resolver.resolve_cycle_presentation(self.f.cycle_id))
         self.assertEqual(before, json.dumps(self.f.report_store.report, sort_keys=True))
 
     def test_cycle_latest_markdown_commit_reuses_old_build_hits_and_source(self):
@@ -124,12 +138,68 @@ class PresentationProtocolTests(unittest.TestCase):
         result = self.f.resolver.resolve_cycle_presentation(self.f.cycle_id)
         self.assertEqual(result['projection']['summary']['covered'], 13)
         self.assertEqual(result['projection']['summary']['not_measurable'], 1)
+        self.assertEqual(result['projection']['summary']['measurable'], 13)
+        self.assertEqual(result['projection']['summary']['changed_line_coverage_percent'], 100)
         file = next(item for item in result['projection']['files'] if item['repo_relative_path'] == 'Guide.md')
         detail = self.f.resolver.resolve_cycle_presentation(
             self.f.cycle_id, result['page_version'], result['presentation_id'], file['file_id'])
         self.assertEqual(detail['lines'][0]['source_text'], '# Latest documentation')
         self.assertEqual(detail['lines'][0]['state'], 'not_measurable')
         self.assertEqual(before, json.dumps(self.f.report_store.report, sort_keys=True))
+
+    def test_produced_presentations_are_accepted_by_existing_extension(self):
+        """Runs real Git/evidence output through the unmodified extension validator and client."""
+        extension_root = Path(os.environ.get('IOSCOVERAGE_EXTENSION_ROOT',
+            str(Path(__file__).resolve().parents[3] / 'chrome_plugins' / 'IOSCoverageGitLabExtension')))
+        if not shutil.which('node') or not (extension_root / 'src/shared/contracts.js').is_file():
+            self.skipTest('Requires Node and the extension checkout (IOSCOVERAGE_EXTENSION_ROOT)')
+        mapping = mapping_fixtures.MRPresentationTests()
+        mapping.setUp()
+        self.addCleanup(mapping.tearDown)
+        mapping.cycle = self.f.cycle_id
+        evidence = mapping.make_evidence(mapping.a, mapping.original)
+        self.f.gitlab.project_registry = resolver_fixtures.project_registry(
+            mapping.root, host='git.example.com', project_path='mobile/example-app')
+        self.f.coverage.get_build = lambda key: (self.f.coverage.build if key == self.f.build_id
+                                                else mapping.builds[key])
+        self.f.report_store.get_mr_evidence = lambda *args: [evidence]
+        self.f.report_store.get_mr_report_snapshot = lambda *args: {'files': [], 'details': {}}
+        cases = (
+            ('mismatch', mapping.original.replace('execute_13()', 'changed_13()'), False, 12 / 13 * 100),
+            ('matching_refs_with_independent_evidence', mapping.original, True, 100),
+            ('zero_percent', ''.join('changed_%02d()\n' % i for i in range(1, 14)), False, 0),
+            ('zero_denominator', '// baseline\n', False, None),
+        )
+        for name, source, matching, expected_percent in cases:
+            with self.subTest(case=name):
+                latest = mapping.commit({'File.swift': source, 'Guide.md': '# Documentation\n'})
+                self.f.gitlab.merge_request = replace(self.f.gitlab.merge_request,
+                    base_sha=mapping.base, start_sha=mapping.base, head_sha=latest)
+                self.page_diff.update(base_sha=mapping.base, start_sha=mapping.base, head_sha=latest)
+                self.f.coverage.build.update(git_sha=latest if matching else mapping.a,
+                    merge_base_sha=mapping.base, target_sha_at_build=mapping.base)
+                self.f.report_store.get_mr_evidence_references = lambda *args: [
+                    {'build_id': evidence['build_id'], 'input_set_sha256': evidence['input_set_sha256']}]
+                cycle = self.f.resolver.resolve_cycle_presentation(self.f.cycle_id)
+                if expected_percent is None:
+                    self.assertIsNone(cycle['projection']['summary']['changed_line_coverage_percent'])
+                else:
+                    self.assertAlmostEqual(cycle['projection']['summary']['changed_line_coverage_percent'], expected_percent)
+                extension = self.f.resolver.resolve_presentation(MR_URL, '123')
+                self.assertFalse(extension['projection']['strict_match'])
+                self.assertEqual(extension['projection']['summary']['measurable'], 0)
+                self.assertIsNone(extension['projection']['summary']['changed_line_coverage_percent'])
+                details = {file['file_id']: self.f.resolver.resolve_presentation(
+                    MR_URL, '123', extension['presentation_id'], file['file_id'])
+                    for file in extension['projection']['files']}
+                for file in extension['projection']['files']:
+                    self.assertEqual(file, details[file['file_id']]['file'])
+                completed = subprocess.run(['node', str(Path(__file__).with_name('extension_consumer.cjs')),
+                    str(extension_root)], input=json.dumps({'summary': extension, 'details': details}),
+                    text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertIn('accepted', completed.stdout)
+                self.assertEqual(cycle, self.f.resolver.resolve_cycle_presentation(self.f.cycle_id))
 
     def test_cycle_without_builds_exposes_verified_diff_without_creating_report(self):
         """Real fixed Git serves unbuilt source while formal/extension report gates stay intact."""
@@ -170,7 +240,7 @@ class PresentationProtocolTests(unittest.TestCase):
         self.f.state_store.state.update(status='running', latest_success_generation=None)
         self.f.coverage.get_cycle = lambda cycle: {**self.f.coverage.cycle, 'mr_url': MR_URL, 'build_count': 1}
         with patch('ioscoverage.server.mr_coverage_resolver.MergeRequestPresentation.project',
-                   return_value=self._cache_snapshot()):
+                   return_value=self._cache_snapshot(coverage_available=False)):
             result = self.f.resolver.resolve_cycle_presentation(self.f.cycle_id)
         self.assertIn('尚无成功构建报告', result['notice'])
         self.assertEqual(result['analysis']['status'], 'running')
@@ -207,14 +277,12 @@ class PresentationProtocolTests(unittest.TestCase):
             self.f.resolver.resolve_cycle_presentation('other-cycle', '123', result['presentation_id'], self.file_id)
         self.assertEqual(raised.exception.code, 'presentation_expired')
 
-    def _cache_snapshot(self, degraded=False):
+    def _cache_snapshot(self, degraded=False, coverage_available=True):
         """Builds contrasting complete results for the same target/evidence identities."""
         lines = [{"new_line_number": number, "state": "unknown" if degraded else (
             "covered" if number < 13 else "uncovered"), "coverage_source": "none", "regions": []}
             for number in range(1,14)]
-        summary = dict(changed_new_side=13,measurable=0,covered=0 if degraded else 12,
-                       uncovered=0 if degraded else 1,not_measurable=0,unknown=13 if degraded else 0,
-                       changed_line_coverage_percent=None)
+        summary = counts(lines, coverage_available=coverage_available)
         descriptor = dict(file_id=self.file_id,repo_relative_path="File.swift",**summary)
         return dict(files=[descriptor],summary=summary,details={self.file_id:dict(file=descriptor,lines=lines)},
                     retryable=degraded)

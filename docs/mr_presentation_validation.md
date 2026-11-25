@@ -13,6 +13,8 @@ Run from the extension root:
 node --test tests/*.test.js
 ```
 
+The server protocol suite also runs produced MR summaries and file details through the actual extension validator and API client. It covers commit mismatch, matching refs with independent evidence, 0% and zero denominator. The Cycle GET keeps its ratio while non-strict extension POST responses preserve the category-only contract; repeated Cycle reads verify that conversion does not mutate the shared snapshot. This test requires Node and an extension checkout, defaulting to the sibling platform path; set `IOSCOVERAGE_EXTENSION_ROOT` for another checkout.
+
 ## Product coverage matrix
 
 | Product cases | Automated evidence |
@@ -24,7 +26,7 @@ node --test tests/*.test.js
 | P13 | Local source/export failure; other valid hits survive; DOM ambiguity affects only its own file |
 | P14 | Report/input identity and page version in cache key; single-flight publication, content-bound issued IDs, retry/recovery without rebinding old IDs; late resolver authorization, late file response, same-generation snapshot replacement and route/version render cancellation |
 | P15 | No successful report, stale page-selected version and malformed/unsupported response fail closed |
-| P16–P17 | Current projection file counts, filter counts, no mismatched-MR percentage, uniform red label |
+| P16–P17 | Current projection file counts, filter counts, Cycle GET ratio, compatible category-only extension POST for mismatched MR, uniform red label |
 | P18 | Git path/hunk plus alignment ambiguity veto; actual row three-ref/path/line validation |
 | P19 | Viewport deferral, four-request limit, progressive async file insertion, batch yielding, mutation locality, repeated-update skipping and cancellation |
 | P20 | Original strict report projection, schema-1 stale gate, formal report storage/HTTP and cumulative analysis regression |

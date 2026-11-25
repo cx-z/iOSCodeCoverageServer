@@ -23,7 +23,7 @@ http://127.0.0.1:8765/login/
 ## 页面能力
 
 - 每 2 秒刷新报告视图；管理员额外查询后台分析状态，展示 queued/running/succeeded/failed 与请求、开始、完成时间，构建报告发布时间单独保留；
-- 展示最新 MR 的 covered、uncovered、not_measurable、unknown；非严格匹配投影无编译分母，可测量覆盖率显示为 `—`；正式构建报告的提交、Build、百分比和发布时间单独标注；
+- 展示最新 MR 的 covered、uncovered、not_measurable、unknown；已有成功报告时，可测量覆盖率按当前 MR 的 `covered / (covered + uncovered) × 100%` 计算，提交更新后继续展示，排除不可测量和 unknown；分母为 0 时显示 `—`；正式构建报告的提交、Build、百分比和发布时间单独标注；
 - 按精确仓库相对路径列出变更文件，并展示逐文件四类计数；
 - 点击文件查看 Git 新侧变更行、行号、源码文本、状态和覆盖来源；
 - 覆盖来源区分 `当前 Build`、`历史继承`、`当前 + 历史` 和无来源；未完全覆盖的行会明确标为“部分 region”，避免把一个正数外层 region 误解为整行已覆盖；

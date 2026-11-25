@@ -102,7 +102,7 @@
       document.getElementById('percent').textContent = summary.changed_line_coverage_percent == null ? '—' : `${summary.changed_line_coverage_percent.toFixed(2)}%`;
       document.getElementById('diff-title').textContent = report.mr ? '最新 MR 变更文件与新侧行' : '构建变更文件与新侧行';
       document.getElementById('report-meta').textContent = report.mr
-        ? `MR !${report.mr.iid} · 提交 ${report.mr.diff.head_sha.slice(0, 8)} · ${report.projection.files.length} 个变更文件${report.projection.strict_match ? '' : ' · 当前 MR 投影无编译分母，不计算覆盖率'}`
+        ? `MR !${report.mr.iid} · 提交 ${report.mr.diff.head_sha.slice(0, 8)} · ${report.projection.files.length} 个变更文件${report.report ? ' · 覆盖率 = Covered / (Covered + Uncovered)' : ''}`
         : `${report.projection.files.length} 个变更文件`;
       renderFiles();
     }

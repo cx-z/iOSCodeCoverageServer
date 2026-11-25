@@ -165,7 +165,7 @@ class MergeRequestCoverageResolver:
                     "report": report, "page_version": None, "presentation_id": None,
                     "projection": {"strict_match": True, "summary": report["summary"], "files": report["files"]}}
         if file_id is not None:
-            detail = self.resolve_presentation(mr_url, page_version, presentation_id, file_id)
+            detail = self._resolve_presentation(mr_url, page_version, presentation_id, file_id)
             if detail["cycle_id"] != cycle_id:
                 raise CoverageReportError("presentation_expired", "MR presentation must be refreshed")
             return detail
@@ -218,7 +218,12 @@ class MergeRequestCoverageResolver:
         return result
 
     def resolve_presentation(self, mr_url, page_version, presentation_id=None, file_id=None):
-        """Negotiates schema 2; schema 1 retains its original strict-SHA behavior."""
+        """Preserves the extension's schema-2 category-only mapped response contract."""
+
+        return self._resolve_presentation(mr_url, page_version, presentation_id, file_id, extension=True)
+
+    def _resolve_presentation(self, mr_url, page_version, presentation_id=None, file_id=None, *, extension=False):
+        """Reads shared snapshots while keeping each consumer's summary representation local."""
 
         normalized = normalize_mr_url(mr_url, self.gitlab_client.project_registry)
         if not isinstance(page_version, str) or re.fullmatch(r"[1-9][0-9]{0,18}", page_version) is None:
@@ -230,13 +235,22 @@ class MergeRequestCoverageResolver:
             if cached is None or cached[0] != scope or file_id not in cached[1]["details"]:
                 raise CoverageReportError("presentation_expired", "MR presentation must be refreshed")
             snapshot = cached[1]
-            return {"schema_version": 2, "presentation_id": presentation_id, "page_version": page_version,
-                    "cycle_id": snapshot["cycle_id"], "mr_iid": scope[1], "generation": snapshot["generation"],
-                    **copy.deepcopy(snapshot["details"][file_id])}
+            detail = {"schema_version": 2, "presentation_id": presentation_id, "page_version": page_version,
+                      "cycle_id": snapshot["cycle_id"], "mr_iid": scope[1], "generation": snapshot["generation"],
+                      **copy.deepcopy(snapshot["details"][file_id])}
+            if extension and not snapshot["strict_match"]:
+                detail["file"].update(measurable=0, changed_line_coverage_percent=None)
+            return detail
         result = self.resolve(mr_url)
         page_diff = (self.gitlab_client.fetch_version_refs(mr_url, page_version)
                      if result["report"] is not None else None)
-        return self._project_presentation(mr_url, page_version, result, page_diff)
+        result = self._project_presentation(mr_url, page_version, result, page_diff)
+        projection = result["projection"]
+        if extension and projection is not None and not projection["strict_match"]:
+            # These are request-owned copies; retain the Cycle ratio in the immutable cache.
+            for summary in (projection["summary"], *projection["files"]):
+                summary.update(measurable=0, changed_line_coverage_percent=None)
+        return result
 
     def _project_presentation(self, mr_url, page_version, result, page_diff):
         """Shares version/ref verification, mapping and cache between both page entrypoints."""
@@ -258,7 +272,7 @@ class MergeRequestCoverageResolver:
         if any(report.get(field) != reference.get(field) for field in ("generation", "current_build_id", "updated_at")):
             raise CoverageReportError("report_identity_mismatch", "Report changed during MR resolution")
         independent = self.report_store.get_mr_evidence_references(cycle_id, report)
-        identity = {"version": "mr-lines/5", "scope": scope, "cycle_id": cycle_id, "diff": page_diff,
+        identity = {"version": "mr-lines/6", "scope": scope, "cycle_id": cycle_id, "diff": page_diff,
                     "generation": report["generation"], "build_id": report["current_build_id"],
                     "orchestration": report["orchestration_input_sha256"], "inputs": report["cycle_input_set_sha256"],
                     "independent_evidence": independent}

@@ -62,6 +62,17 @@ test('latest MR counts and source are separate from formal build percentage', as
   assert.match(p.el('file-list').children[0].textContent, /没有符合/);
 });
 
+test('updated MR displays its own coverage ratio and retains the formal Build percentage', async () => {
+  const p = page(); await p.tick(); const s = snapshot();
+  Object.assign(s.projection.summary, {covered:431, uncovered:210, measurable:641,
+    changed_line_coverage_percent:431 / 641 * 100});
+  await p.reply(s);
+  assert.equal(p.el('percent').textContent, '67.24%');
+  assert.match(p.el('report-meta').textContent, /Covered \/ \(Covered \+ Uncovered\)/);
+  assert.doesNotMatch(p.el('report-meta').textContent, /不计算覆盖率/);
+  assert.match(p.el('build-report-meta').textContent, /99.83%/);
+});
+
 test('new presentation at the same generation invalidates old rows and late detail', async () => {
   const p = page(); await p.tick(); const a = snapshot(); await p.reply(a);
   const loading = p.run("loadFile('" + 'f'.repeat(64) + "')");
