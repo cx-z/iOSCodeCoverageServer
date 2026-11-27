@@ -23,7 +23,7 @@ http://127.0.0.1:8765/login/
 ## 页面能力
 
 - 每 2 秒刷新报告视图；管理员额外查询后台分析状态，展示 queued/running/succeeded/failed 与请求、开始、完成时间，构建报告发布时间单独保留；
-- 展示最新 MR 的 covered、uncovered、not_measurable、unknown；已有成功报告时，可测量覆盖率按当前 MR 的 `covered / (covered + uncovered) × 100%` 计算，提交更新后继续展示，排除不可测量和 unknown；分母为 0 时显示 `—`；正式构建报告的提交、Build、百分比和发布时间单独标注；
+- 展示最新 MR 的 covered、uncovered、not_measurable、unknown；已有成功报告时，可测量覆盖率按当前 MR 的 `covered / (covered + uncovered) × 100%` 计算，提交更新后继续展示，排除不可测量和 unknown；分母为 0 时显示 `—`；正式构建报告的提交、Build 和发布时间单独标注；MR 与构建报告的 base/start/head 全部相同时只显示顶部一个覆盖率，diff 不同时另行标注正式构建报告的百分比；
 - 按精确仓库相对路径列出变更文件，并展示逐文件四类计数；
 - 点击文件查看 Git 新侧变更行、行号、源码文本、状态和覆盖来源；
 - 覆盖来源区分 `当前 Build`、`历史继承`、`当前 + 历史` 和无来源；未完全覆盖的行会明确标为“部分 region”，避免把一个正数外层 region 误解为整行已覆盖；
@@ -55,7 +55,7 @@ GitLab MR 页面上的只读浏览器扩展先调用：
 POST /api/v1/integrations/gitlab/merge-request-coverage/resolve
 ```
 
-服务端 schema 2 验证扩展页面选择的 diff ID 和实际行三 SHA，再将独立构建证据映射到该版本。Cycle 页面通过 `/mr-presentation` 入口由服务端发现最新版本，复用相同的验证、投影和缓存；文件详情携带摘要的 `page_version + presentation_id + file_id`。Markdown 等明确的不可插桩文件不要求新包即可显示为“不可测量”。正式 `/report` 与 `/report/files/…` 仍保留原构建口径。
+服务端 schema 2 验证扩展页面选择的 diff ID 和实际行三 SHA，再将独立构建证据映射到该版本。Cycle 页面通过 `/mr-presentation` 入口由服务端发现最新版本，复用相同的验证、投影和缓存；文件详情携带摘要的 `page_version + presentation_id + file_id`。Markdown 等明确的不可插桩文件不要求新包即可显示为“不可测量”。正式 `/report` 与 `/report/files/…` 使用构建固定 diff，并与 MR 展示共用不可执行行分类规则：先排除纯注释、空白、结构符号、纯声明、编译指令及明确的配置/资源数据，再统计可测量行；带运行表达式的行仍依据 LLVM/继承证据判断。历史已发布结果保持不可变，重新分析后发布使用统一规则的新正式报告。
 
 resolver 的读取同样由 `anonymous_read` 控制；它只接受 MR 页面 URL，不创建 Cycle、不触发分析、不修改报告，也不向浏览器暴露 GitLab PAT 或本机路径。完整响应与状态语义见 [HTTP API](api.md#6-gitlab-mr-coverage-只读解析)。
 

@@ -73,6 +73,24 @@ test('updated MR displays its own coverage ratio and retains the formal Build pe
   assert.match(p.el('build-report-meta').textContent, /99.83%/);
 });
 
+test('the same diff displays one ratio while retaining formal Build identity', async () => {
+  const p = page(); await p.tick(); const s = snapshot();
+  s.mr.diff = {base_sha:'base', start_sha:'base', head_sha:'current'};
+  s.report.build_diff = {...s.mr.diff};
+  Object.assign(s.projection.summary, {covered:379, uncovered:79, measurable:458,
+    changed_line_coverage_percent:379 / 458 * 100});
+  s.report.summary.changed_line_coverage_percent = 85.33;
+  await p.reply(s);
+  assert.equal(p.el('percent').textContent, '82.75%');
+  assert.match(p.el('build-report-meta').textContent, /Generation 7.*old-build.*current/);
+  assert.doesNotMatch(p.el('build-report-meta').textContent, /%|可测量覆盖率/);
+
+  const refresh = p.run('refresh()');
+  s.report.build_diff.base_sha = 'other-base';
+  await p.reply(s); await refresh;
+  assert.match(p.el('build-report-meta').textContent, /85.33%/);
+});
+
 test('new presentation at the same generation invalidates old rows and late detail', async () => {
   const p = page(); await p.tick(); const a = snapshot(); await p.reply(a);
   const loading = p.run("loadFile('" + 'f'.repeat(64) + "')");

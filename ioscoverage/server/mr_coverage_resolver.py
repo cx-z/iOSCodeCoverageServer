@@ -66,7 +66,7 @@ class MergeRequestCoverageResolver:
 
         normalized = normalize_mr_url(mr_url, self.gitlab_client.project_registry)
         try:
-            merge_request = self.gitlab_client.fetch(mr_url)
+            merge_request = self.gitlab_client.fetch(mr_url, allow_closed=True)
         except GitLabMRClientError as error:
             if error.code not in PRODUCT_GITLAB_STATUSES:
                 raise

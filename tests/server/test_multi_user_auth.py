@@ -19,7 +19,7 @@ from tests.helpers import project_registry
 class FakeGitLabMRClient:
     """Returns one deterministic open MR snapshot without network access."""
 
-    def fetch(self, _mr_url):
+    def fetch(self, _mr_url, *, allow_closed=False):
         """Returns the fixed registered-project MR used by submission tests."""
 
         return GitLabMergeRequest(

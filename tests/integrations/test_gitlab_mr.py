@@ -170,6 +170,7 @@ class GitLabMRClientTests(unittest.TestCase):
             ({"iid": 57}, "gitlab_project_mismatch"),
             ({"web_url": "https://git.example.com/other/x/merge_requests/42"}, "gitlab_project_mismatch"),
             ({"state": "closed"}, "mr_not_open"),
+            ({"state": "merged"}, "mr_not_open"),
             ({"target_branch": ""}, "gitlab_invalid_response"),
             ({"diff_refs": None}, "mr_diff_refs_not_ready"),
             ({"diff_refs": {"base_sha": "a" * 40, "start_sha": "b" * 40}}, "mr_diff_refs_not_ready"),
@@ -187,6 +188,36 @@ class GitLabMRClientTests(unittest.TestCase):
                     ),
                 ).fetch(url)
             self.assertEqual(raised.exception.code, code)
+
+    def test_coverage_read_accepts_closed_and_merged_with_valid_refs_only(self):
+        """Keeps testing restricted while allowing existing coverage to be read after closure."""
+
+        url = "https://git.example.com/mobile/example-app/merge_requests/42/diffs"
+        client = GitLabMRClient(
+            self.token_path, self.registry,
+            transport=lambda request, timeout: (200, json.dumps(self.payload).encode()),
+        )
+        for state in ("closed", "merged"):
+            with self.subTest(state=state):
+                self.payload["state"] = state
+                result = client.fetch(url, allow_closed=True)
+                self.assertEqual(result.state, state)
+                self.assertEqual(result.head_sha, self.payload["diff_refs"]["head_sha"])
+                with self.assertRaises(GitLabMRClientError) as raised:
+                    client.fetch(url)
+                self.assertEqual(raised.exception.code, "mr_not_open")
+
+                refs = self.payload["diff_refs"]
+                self.payload["diff_refs"] = None
+                with self.assertRaises(GitLabMRClientError) as raised:
+                    client.fetch(url, allow_closed=True)
+                self.assertEqual(raised.exception.code, "mr_diff_refs_not_ready")
+                self.payload["diff_refs"] = refs
+
+        self.payload["state"] = "unexpected"
+        with self.assertRaises(GitLabMRClientError) as raised:
+            client.fetch(url, allow_closed=True)
+        self.assertEqual(raised.exception.code, "mr_not_open")
 
     def test_page_version_uses_bounded_registered_metadata_and_exact_refs(self):
         """Binds the page diff ID without downloading a full potentially huge diff."""

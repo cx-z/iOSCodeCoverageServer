@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from unittest.mock import patch
 from ioscoverage.analysis.mr_presentation import counts
+from ioscoverage.integrations.gitlab_mr import GitLabMRClient
 from ioscoverage.storage.reports import CoverageReportError
 from tests.server import test_gitlab_coverage_resolver as resolver_fixtures
 MR_URL = resolver_fixtures.MR_URL
@@ -43,6 +44,59 @@ class PresentationProtocolTests(unittest.TestCase):
     def tearDown(self):
         """Removes temporary fixture state."""
         self.fixture.tearDown()
+
+    def test_closed_and_merged_mrs_keep_verified_coverage_with_real_gitlab_parser(self):
+        """Exercises both resolver schemas after closure without bypassing version/ref gates."""
+
+        token_path = self.f.root / 'gitlab_api_token'
+        token_path.write_text('gitlab-test-token-value', encoding='utf-8')
+        payload = dict(iid=42, web_url=MR_URL, state='opened',
+                       source_branch='feature/coverage', target_branch='main',
+                       diff_refs=dict(self.page_diff))
+        version = dict(id=123, **{
+            name + '_commit_sha': self.page_diff[name + '_sha']
+            for name in ('base', 'start', 'head')})
+
+        def transport(request, timeout):
+            """Returns fixed MR/version metadata without network or GitLab writes."""
+
+            self.assertEqual(request.get_method(), 'GET')
+            response = [version] if '/versions?' in request.full_url else payload
+            return 200, json.dumps(response).encode()
+
+        self.f.resolver.gitlab_client = GitLabMRClient(
+            token_path, self.f.registry, transport=transport)
+        before = json.dumps(self.f.report_store.report, sort_keys=True)
+        opened = self.f.resolver.resolve_presentation(MR_URL, '123')
+        for state in ('closed', 'merged'):
+            with self.subTest(state=state):
+                payload['state'] = state
+                self.assertTrue(self.f.resolver.resolve(MR_URL)['can_annotate'])
+                result = self.f.resolver.resolve_presentation(MR_URL, '123')
+                self.assertEqual(result, opened)
+                detail = self.f.resolver.resolve_presentation(
+                    MR_URL, '123', result['presentation_id'], self.file_id)
+                self.assertEqual(detail['file']['file_id'], self.file_id)
+                self.assertEqual(self.f.resolver.resolve_cycle_presentation(
+                    self.f.cycle_id)['presentation_id'], result['presentation_id'])
+
+                rejected = self.f.resolver.resolve_presentation(MR_URL, '122')
+                self.assertEqual(rejected['status'], 'page_version_unverified')
+                self.assertFalse(rejected['can_annotate'])
+                for name in ('base', 'start', 'head'):
+                    field = name + '_sha'
+                    payload['diff_refs'][field] = 'e' * 40
+                    self.assertFalse(self.f.resolver.resolve(MR_URL)['can_annotate'])
+                    rejected = self.f.resolver.resolve_presentation(MR_URL, '123')
+                    self.assertEqual(rejected['status'], 'page_version_unverified')
+                    self.assertFalse(rejected['can_annotate'])
+                    payload['diff_refs'][field] = self.page_diff[field]
+
+                self.f.state_store.state['latest_success_generation'] = None
+                self.assertFalse(self.f.resolver.resolve_presentation(
+                    MR_URL, '123')['can_annotate'])
+                self.f.state_store.state['latest_success_generation'] = 7
+        self.assertEqual(json.dumps(self.f.report_store.report, sort_keys=True), before)
 
     def test_P12_P14_generation_unchanged_head_base_start_each_invalidate(self):
         """The complete MR triple participates in snapshot/cache identity."""

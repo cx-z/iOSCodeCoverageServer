@@ -479,11 +479,11 @@ GET /api/v1/cycles/<cycle_id>/report/files/<file_id>
 
 身份包含目标完整三 SHA、页面版本、注册项目/MR/Cycle、正式报告 generation、Build、orchestration、input-set hash 和尚未纳入正式报告的独立 Build 证据引用。缺失或未测试当前 Build 时，后台仍可发布旧 Build 的成功独立分析引用；此时正式分析保持失败及旧成功报告，MR 可使用新引用更新适用行。客户端还须对照实际行 `data-position` 的三 SHA、路径和新侧行号；不能仅相信服务器最新版本或相同 generation。异步授权、详情缓存和渲染必须使用 presentation ID。
 
-schema 2 直接验证收到的状态组合：关闭/不存在 MR、无报告或版本无法确认的状态不能授权标注；pending/failed 元数据与状态必须一致，有有效证据时仍可标注并继续轮询。
+schema 2 直接验证收到的状态组合：不支持的 MR 状态、MR 不存在、无成功报告或版本无法确认时不能授权标注；`opened`、`closed`、`merged` 均支持只读查询，关闭或合并本身不会禁止标注，仍须满足成功报告与版本校验要求。pending/failed 元数据与状态必须一致，有有效证据时仍可标注并继续轮询。
 
 schema 1 的请求、严格匹配和 `stale_diff` 行为保持不变。新扩展发送 schema 2；旧服务拒绝时失败关闭，不降级套用旧报告。旧扩展的 schema-1 严格校验继续有效。正式 `/report`、`/report/files/…` 接口语义不变；Cycle 页面改用下述最新 MR 投影读取入口。
 
-MR 展示不依赖当前或历史 Build 即可将以下已确认非执行内容归为 `not_measurable`，排除出可测分母：
+正式单 Build diff/Cycle 分析与 MR 展示共用不可执行分类规则，将以下已确认非执行内容归为 `not_measurable`，排除出可测分母；MR 展示的分类不要求已有匹配 Build：
 
 - 配置/项目数据：`.plist`、`.json`、`.xcconfig`、entitlements/privacy、Xcode 与依赖元数据、已有 Markdown/本地化格式。
 - 资源数据：asset catalog 的 JSON 清单、图片/SVG/PDF、字体、音视频、界面 `.xib/.storyboard`、数据模型及已登记的文本数据格式；二进制 diff 没有逐行分母。完整匹配列表由 `analysis/mapping/file_classification.py` 维护，资源目录中的可执行脚本/Swift/Metal 等不会仅因目录名而被排除。
@@ -500,7 +500,7 @@ GET /api/v1/cycles/<cycle_id>/mr-presentation?page_version=<id>&presentation_id=
 
 鉴权沿用 report 的只读边界（`anonymous_read=true` 时允许匿名，否则要求有效身份；无效 Bearer 始终拒绝）。摘要请求不接受 query；详情必须恰好提供上述三个参数各一次。Cycle 关联的 MR URL 由服务端读取，浏览器不能指定 Git SHA、MR URL、仓库或文件路径。
 
-摘要返回与 schema 2 相同的投影形状；Cycle GET 保留当前 MR 比例，扩展 POST 的非严格匹配摘要与详情在输出边界保持旧版分类口径，转换仅作用于请求副本，不修改共享缓存、presentation ID 或逐行证据。服务端发现最新 GitLab diff ID，并验证其完整三 SHA 与当前 MR 一致后，复用现有投影和缓存。详情按同一 Cycle 和已签发的不可变身份读取；过期返回 `presentation_expired`，必须重新取摘要。映射行额外提供固定目标提交的 `source_text`，源码不可读时保持 unknown。正式报告内容、时间、百分比和编译分母不随此读取改变；有成功报告的 MR 投影按当前 `covered / (covered + uncovered)` 计算百分比，分母为 0 时为 null。没有关联 MR 的历史 Cycle 返回 `status:build_report`、空 MR/投影 ID 和正式报告投影，其详情继续使用原 report/file API。Cycle 浏览器遇到关闭/已合并 MR、无法验证的 MR 版本或 GitLab/网络故障时，也会独立调用正式 `/report` 与 file API 保留构建报告浏览，并明确标注当前不是最新 MR diff；该浏览器回退不改变 MR resolver 的拒绝标注语义或正式报告口径。
+摘要返回与 schema 2 相同的投影形状；Cycle GET 保留当前 MR 比例，扩展 POST 的非严格匹配摘要与详情在输出边界保持旧版分类口径，转换仅作用于请求副本，不修改共享缓存、presentation ID 或逐行证据。服务端发现最新 GitLab diff ID，并验证其完整三 SHA 与当前 MR 一致后，复用现有投影和缓存。详情按同一 Cycle 和已签发的不可变身份读取；过期返回 `presentation_expired`，必须重新取摘要。映射行额外提供固定目标提交的 `source_text`，源码不可读时保持 unknown。正式报告内容、时间、百分比和编译分母不随此读取改变；有成功报告的 MR 投影按当前 `covered / (covered + uncovered)` 计算百分比，分母为 0 时为 null。没有关联 MR 的历史 Cycle 返回 `status:build_report`、空 MR/投影 ID 和正式报告投影，其详情继续使用原 report/file API。Cycle 浏览器遇到不支持的 MR 状态、无法验证的 MR 版本或 GitLab/网络故障时，也会独立调用正式 `/report` 与 file API 保留构建报告浏览，并明确标注当前不是最新 MR diff；该浏览器回退不改变 MR resolver 的拒绝标注语义或正式报告口径。
 
 Cycle GET 入口在 MR 有效但尚无成功构建报告时，可返回 `status: "diff_only"`、`report: null`、`build_count`、`notice` 和已验证的不可变 `projection/presentation_id/page_version`。此时复用固定 Git 投影但不提供任何构建证据；已知不可插桩文件为 `not_measurable`，其他可读变更行无命中证据，覆盖率为 null。浏览器提示“尚无构建包”或“尚无成功构建报告”，文件详情仍携带签发的同一组身份。正式 `/report` 继续返回 `report_not_available`；扩展 POST 的 schema 1/2 仍要求成功报告，不受此 Cycle 页面能力扩展影响。
 
@@ -578,6 +578,8 @@ Build.target_sha_at_build == GitLab.diff_refs.start_sha
 Build.git_sha             == GitLab.diff_refs.head_sha
 ```
 
+覆盖率只读查询支持 `opened`、`closed`、`merged` MR：关闭或合并后仍查询已有 Cycle 与报告，版本和三 SHA 校验不变。提交 MR 创建/复用 Cycle 与后台分支同步仍要求 `opened`。
+
 产品状态及轮询语义：
 
 | `status` | `can_annotate` | `should_poll` | 说明 |
@@ -588,7 +590,7 @@ Build.git_sha             == GitLab.diff_refs.head_sha
 | `analysis_pending` | 视旧报告是否存在且匹配 | true | queued/running；匹配的完整旧报告可以继续展示 |
 | `analysis_failed` | 视旧报告是否存在且匹配 | false | 最新分析失败；匹配的完整旧报告可以继续展示 |
 | `stale_diff` | false | queued/running 时为 true，否则 false | latest success 的 Build 三 SHA 至少一项不匹配；报告引用可返回但禁止逐行标注 |
-| `mr_not_open` | false | false | MR 当前不是 opened |
+| `mr_not_open` | false | false | MR 状态不在只读查询支持的 opened/closed/merged 范围内 |
 | `mr_diff_refs_not_ready` | false | false | GitLab 尚未给出完整合法的三个 diff ref |
 
 `cycle`、`analysis`、`report` 在对应状态下可以为 `null`，但顶层字段始终存在。非法 URL、未注册项目、GitLab 鉴权/网络/上游错误及报告完整性错误使用既有 HTTP 4xx/5xx 错误结构，不伪装成产品状态。

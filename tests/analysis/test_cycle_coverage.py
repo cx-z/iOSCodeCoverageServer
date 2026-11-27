@@ -16,6 +16,8 @@ from ioscoverage.analysis.command_runner import EvidenceCommandRunner
 from ioscoverage.cli.analyze_cycle_coverage import parse_build_inputs
 from ioscoverage.analysis.cumulative.analyzer import CycleCoverageAnalysisError, CycleCoverageAnalyzer
 from ioscoverage.analysis.single_build.analyzer import AnalysisConfiguration
+from ioscoverage.analysis.diff.analyzer import SingleBuildDiffAnalyzer
+from ioscoverage.analysis.mr_presentation import exclude_snapshot_non_executable
 from ioscoverage.storage.cumulative_lines import decode_cumulative_lines
 from ioscoverage.storage.analysis_state import AnalysisStateStore
 from ioscoverage.storage.reports import CoverageReportStore
@@ -148,6 +150,79 @@ class CycleCoverageAnalyzerTests(unittest.TestCase):
             line["regions"][0]["inheritance_attempts"][0]["reason"],
             "region_contains_modified_or_added_line",
         )
+
+    def test_formal_and_mr_counts_share_non_executable_exclusions(self) -> None:
+        """Publishes identical diff/Cycle/MR counts despite compiler hits over syntax and data."""
+
+        path = "Sources/File.swift"
+        source = (
+            "// base\nimport Foundation\nfunc sample() {\n    // comment inside hit region\n"
+            "    let hit = work()\n    let miss = other()\n}\n#if DEBUG\n"
+            "func defaults(value: Int = buildDefault()) {}\n#endif\n"
+            "let callback = { runtimeCall() }()\nstruct Empty {}\n"
+        )
+        resource = '{"enabled": true}\n'
+        self._write_files({path: source, "Config.json": resource})
+        sha = self._commit("source and resource changes")
+        self._register_build(self.build_b, sha, 2)
+        source_lines = source.splitlines()
+        regions = [
+            (path, 2, 1, 12, len(source_lines[11]) + 1, 1, "sample"),
+            (path, 6, 1, 6, len(source_lines[5]) + 1, 0, "miss"),
+            (path, 9, 1, 9, len(source_lines[8]) + 1, 0, "default"),
+            ("Config.json", 1, 1, 1, len(resource.rstrip()) + 1, 1, "data"),
+        ]
+        self._single_result(self.build_b, self.input_b, sha, self._coverage(source, regions))
+
+        cumulative = self._analyze(self.build_b, {self.build_b: self.input_b})
+        diff = SingleBuildDiffAnalyzer(self.configuration).analyze(self.cycle_id, self.build_b, self.input_b)
+        lines = self._lines(cumulative.output_directory)
+        diff_lines = json.loads((diff.output_directory / "changed-line-coverage.json").read_text())["lines"]
+        self.assertEqual(
+            [(line["repo_relative_path"], line["new_line_number"], line["state"]) for line in lines],
+            [(line["repo_relative_path"], line["new_line_number"], line["state"]) for line in diff_lines],
+        )
+        self.assertEqual({line["new_line_number"]: line["state"] for line in lines
+                          if line["repo_relative_path"] == path}, {
+            2: "not_measurable", 3: "not_measurable", 4: "not_measurable", 5: "covered",
+            6: "uncovered", 7: "not_measurable", 8: "not_measurable", 9: "uncovered",
+            10: "not_measurable", 11: "covered", 12: "not_measurable",
+        })
+        for result in (cumulative, diff):
+            self.assertEqual(result.summary["lines"]["covered"], 2)
+            self.assertEqual(result.summary["lines"]["uncovered"], 2)
+            self.assertEqual(result.summary["lines"]["not_measurable"], 8)
+            self.assertEqual(result.summary["changed_line_coverage_percent"], 50.0)
+
+        store = CoverageReportStore(self.analysis_root.parent, None)
+        files, details = [], {}
+        for summary in cumulative.summary["per_file"]:
+            file_id = hashlib.sha256(summary["repo_relative_path"].encode()).hexdigest()
+            file = {**summary, "file_id": file_id, "changed_line_coverage_percent":
+                    summary["covered"] / summary["measurable"] * 100 if summary["measurable"] else None}
+            files.append(file)
+            details[file_id] = {"file": file, "lines": [store._line_document(line) for line in lines
+                if line["repo_relative_path"] == file["repo_relative_path"]]}
+        snapshot = {"files": files, "details": details, "summary": {
+            **cumulative.summary["lines"], "changed_line_coverage_percent": 50.0,
+        }}
+        projected = exclude_snapshot_non_executable(snapshot, {path: source, "Config.json": resource}.__getitem__)
+        self.assertEqual(projected, snapshot)
+
+    def test_syntax_only_formal_reports_have_no_percentage(self) -> None:
+        """A hit compiler region over an empty function cannot fabricate a denominator."""
+
+        source = "// base\nfunc empty() {\n    // nothing executable\n}\n"
+        sha = self._commit_source("Sources/File.swift", source, "empty function")
+        self._register_build(self.build_b, sha, 2)
+        self._single_result(self.build_b, self.input_b, sha, self._coverage(source, [
+            ("Sources/File.swift", 2, 1, 4, 2, 1, "empty"),
+        ]))
+        for result in (self._analyze(self.build_b, {self.build_b: self.input_b}),
+                       SingleBuildDiffAnalyzer(self.configuration).analyze(self.cycle_id, self.build_b, self.input_b)):
+            self.assertEqual(result.summary["lines"]["measurable"], 0)
+            self.assertEqual(result.summary["lines"]["not_measurable"], 3)
+            self.assertIsNone(result.summary["changed_line_coverage_percent"])
 
     def test_foreign_roots_preserve_only_exact_historical_region(self) -> None:
         """Maps differently named checkouts while retaining strict Git inheritance."""

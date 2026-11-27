@@ -617,7 +617,7 @@ class SingleBuildDiffAnalyzerTests(unittest.TestCase):
         self.assertNotIn("/vendor/", normalized)
 
     def test_conflicting_same_path_coverage_is_unknown(self) -> None:
-        """Marks inconsistent duplicate file records instead of choosing one."""
+        """Keeps executable rows unknown while independently proving the comment unmeasurable."""
 
         payload = self._coverage_payload()
         duplicate = dict(payload["data"][0]["files"][0])
@@ -625,7 +625,8 @@ class SingleBuildDiffAnalyzerTests(unittest.TestCase):
         payload["data"][0]["files"].append(duplicate)
         self._replace_export(payload)
         result = self.analyzer().analyze(self.cycle_id, self.build_id, self.input_sha)
-        self.assertEqual(result.summary["lines"]["unknown"], 3)
+        self.assertEqual(result.summary["lines"]["unknown"], 2)
+        self.assertEqual(result.summary["lines"]["not_measurable"], 1)
 
     def test_all_positive_regions_are_covered(self) -> None:
         """Classifies a line covered only when every intersecting region is positive."""
@@ -654,13 +655,14 @@ class SingleBuildDiffAnalyzerTests(unittest.TestCase):
         self.assertEqual(state[0], "not_measurable")
 
     def test_out_of_range_region_is_unknown(self) -> None:
-        """Does not trust coverage positions beyond the exact Git object source."""
+        """Rejects invalid region positions without making a pure comment measurable."""
 
         payload = self._coverage_payload()
         payload["data"][0]["functions"][0]["regions"][0][2] = 99
         self._replace_export(payload)
         result = self.analyzer().analyze(self.cycle_id, self.build_id, self.input_sha)
-        self.assertEqual(result.summary["lines"]["unknown"], 3)
+        self.assertEqual(result.summary["lines"]["unknown"], 2)
+        self.assertEqual(result.summary["lines"]["not_measurable"], 1)
 
     def test_zero_length_llvm_region_is_ignored_without_poisoning_file(self) -> None:
         """Treats a valid Xcode 26.3 zero-area region as non-measuring evidence."""

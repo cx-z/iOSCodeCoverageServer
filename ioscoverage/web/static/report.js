@@ -116,7 +116,11 @@
         return;
       }
       const percent = build.summary.changed_line_coverage_percent;
-      document.getElementById('build-report-meta').textContent = `正式构建报告：Generation ${build.generation} · Build ${build.current_build_id}${build.build_diff ? ` · 提交 ${build.build_diff.head_sha.slice(0, 8)}` : ''} · 可测量覆盖率 ${percent == null ? '—' : `${percent.toFixed(2)}%`}`;
+      // One diff has one displayed ratio, including while an older report awaits reanalysis.
+      const sameDiff = report.mr && build.build_diff && ['base_sha', 'start_sha', 'head_sha']
+        .every(field => report.mr.diff[field] === build.build_diff[field]);
+      const coverage = sameDiff ? '' : ` · 可测量覆盖率 ${percent == null ? '—' : `${percent.toFixed(2)}%`}`;
+      document.getElementById('build-report-meta').textContent = `正式构建报告：Generation ${build.generation} · Build ${build.current_build_id}${build.build_diff ? ` · 提交 ${build.build_diff.head_sha.slice(0, 8)}` : ''}${coverage}`;
       document.getElementById('updated-at').textContent = build.updated_at ? `构建报告时间 ${new Date(build.updated_at).toLocaleString()}` : '—';
     }
     function renderFiles() {

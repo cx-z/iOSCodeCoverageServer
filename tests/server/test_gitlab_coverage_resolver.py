@@ -49,12 +49,14 @@ class FakeGitLabClient:
             head_sha=HEAD_SHA,
         )
 
-    def fetch(self, mr_url):
+    def fetch(self, mr_url, *, allow_closed=False):
         """Returns one configured response or bounded integration error."""
 
         self.calls.append(mr_url)
         if self.error is not None:
             raise self.error
+        if self.merge_request.state != "opened" and not allow_closed:
+            raise GitLabMRClientError("mr_not_open", "merge request is not open for testing", 409)
         return self.merge_request
 
 

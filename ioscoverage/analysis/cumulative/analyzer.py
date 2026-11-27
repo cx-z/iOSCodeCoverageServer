@@ -14,6 +14,8 @@ from pathlib import Path, PurePosixPath
 from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ioscoverage.analysis.command_runner import EvidenceCommandRunner
+from ioscoverage.analysis.mapping.file_classification import is_non_instrumented_file
+from ioscoverage.analysis.mapping.source_non_executable import non_executable_lines
 from ioscoverage.storage.cumulative_lines import (
     CUMULATIVE_LINES_SCHEMA_VERSION,
     encode_cumulative_lines,
@@ -47,7 +49,7 @@ from ioscoverage.analysis.mapping.source_region import (
 
 
 CYCLE_COVERAGE_SCHEMA_VERSION = 1
-CYCLE_ANALYZER_VERSION = "cycle-coverage/7"
+CYCLE_ANALYZER_VERSION = "cycle-coverage/8"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -418,7 +420,7 @@ class CycleCoverageAnalyzer:
         history_diffs: Mapping[str, Tuple[List[NormalizedDiffFile], str]],
         repository_path: Path,
     ) -> Tuple[List[Dict[str, object]], List[Dict[str, object]], List[Dict[str, object]]]:
-        """Classifies current changed lines and resolves every zero region conservatively."""
+        """Excludes non-executable rows and resolves measurable regions conservatively."""
 
         source_cache: Dict[Tuple[str, str], str] = {}
         file_mapping_cache: Dict[Tuple[str, str], FileLineMapping] = {}
@@ -460,13 +462,20 @@ class CycleCoverageAnalyzer:
             current_path = diff_file.new_path
             current_source = load_source(current_sha, current_path)
             source_lines = current_source.splitlines()
+            non_instrumented = is_non_instrumented_file(current_path)
+            excluded = non_executable_lines(current_path, current_source)
             file_lines: List[Dict[str, object]] = []
             for line_number in diff_file.changed_new_lines:
-                if current_path in current.coverage.conflicted_paths:
-                    state = "unknown"
-                    reason = current.coverage.conflicted_paths[current_path]
+                exclusion = "non_instrumented_file_type" if non_instrumented else excluded.get(line_number)
+                if exclusion and 0 < line_number <= len(source_lines):
+                    state, reason = "not_measurable", exclusion
                     related: Sequence[CoverageRegion] = ()
                     resolutions: List[Dict[str, object]] = []
+                elif current_path in current.coverage.conflicted_paths:
+                    state = "unknown"
+                    reason = current.coverage.conflicted_paths[current_path]
+                    related = ()
+                    resolutions = []
                 else:
                     current_regions = current.coverage.regions_by_path.get(current_path)
                     if current_regions is None:

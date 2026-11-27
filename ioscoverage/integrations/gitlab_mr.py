@@ -63,7 +63,9 @@ class GitLabMRClient:
         self.transport = transport or self._default_transport
         self.timeout_seconds = timeout_seconds
 
-    def fetch(self, mr_url: object) -> GitLabMergeRequest:
+    def fetch(self, mr_url: object, *, allow_closed: bool = False) -> GitLabMergeRequest:
+        """Reads validated refs; coverage readers may also inspect closed/merged MRs."""
+
         normalized = normalize_mr_url(mr_url, self.project_registry)
         definition = normalized.project
         request = Request(
@@ -85,7 +87,7 @@ class GitLabMRClient:
             raise GitLabMRClientError("mr_not_found", "merge request was not found", 404)
         if status != 200:
             raise GitLabMRClientError("gitlab_request_failed", "GitLab MR lookup failed", 502)
-        return self._parse_response(normalized, body)
+        return self._parse_response(normalized, body, allow_closed=allow_closed)
 
     def fetch_version_refs(self, mr_url: object, version_id: str):
         """Binds a page-selected numeric diff ID to its immutable three refs."""
@@ -136,7 +138,9 @@ class GitLabMRClient:
             raise GitLabMRClientError("gitlab_token_invalid", "GitLab credential is invalid", 503)
         return token
 
-    def _parse_response(self, requested: NormalizedMRURL, body: bytes) -> GitLabMergeRequest:
+    def _parse_response(self, requested: NormalizedMRURL, body: bytes, *, allow_closed: bool = False) -> GitLabMergeRequest:
+        """Validates MR identity and fixed refs without relaxing testing eligibility by default."""
+
         if len(body) > GITLAB_RESPONSE_LIMIT:
             raise GitLabMRClientError("gitlab_invalid_response", "GitLab response is too large", 502)
         try:
@@ -154,7 +158,7 @@ class GitLabMRClient:
         if response is None or response.iid != requested.iid or response.project.project != requested.project.project:
             raise GitLabMRClientError("gitlab_project_mismatch", "GitLab MR project does not match the registered project", 502)
         state = self._required_text(payload, "state")
-        if state != "opened":
+        if state != "opened" and not (allow_closed and state in ("closed", "merged")):
             raise GitLabMRClientError("mr_not_open", "merge request is not open for testing", 409)
         diff_refs = payload.get("diff_refs")
         if not isinstance(diff_refs, dict):

@@ -16,6 +16,8 @@ from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import quote
 
 from ioscoverage.analysis.command_runner import EvidenceCommandRunner
+from ioscoverage.analysis.mapping.file_classification import is_non_instrumented_file
+from ioscoverage.analysis.mapping.source_non_executable import non_executable_lines
 from ioscoverage.analysis.mapping.coverage_export import (
     CoverageExportError,
     NormalizedCoverage,
@@ -37,7 +39,7 @@ from ioscoverage.storage.retained_evidence import RetainedBuildEvidenceStore
 
 
 DIFF_ANALYSIS_SCHEMA_VERSION = 1
-DIFF_ANALYZER_VERSION = "single-build-diff/7"
+DIFF_ANALYZER_VERSION = "single-build-diff/8"
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 SUPPORTED_COVERAGE_BINARIES = ("main_executable", "debug_dylib")
 
@@ -556,7 +558,7 @@ class SingleBuildDiffAnalyzer:
         git_sha: str,
         repository_path: Path,
     ) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
-        """Loads new-side Git objects and applies conservative compiler-region states."""
+        """Excludes proven non-executable rows before applying compiler-region states."""
 
         changed_lines: List[Dict[str, object]] = []
         git_files: List[Dict[str, object]] = []
@@ -584,15 +586,21 @@ class SingleBuildDiffAnalyzer:
                 ["git", "-C", repository, "show", git_sha + ":" + item.new_path],
             )
             source_lines = result.stdout.splitlines()
+            non_instrumented = is_non_instrumented_file(item.new_path)
+            excluded = non_executable_lines(item.new_path, result.stdout)
             file_record["source_command"] = label
             file_record["source_size"] = len(result.stdout.encode("utf-8"))
             file_record["source_sha256"] = hashlib.sha256(
                 result.stdout.encode("utf-8")
             ).hexdigest()
             for line_number in item.changed_new_lines:
-                state, reason, related = self._line_state(
-                    item.new_path, line_number, source_lines, coverage
-                )
+                exclusion = "non_instrumented_file_type" if non_instrumented else excluded.get(line_number)
+                if exclusion and 0 < line_number <= len(source_lines):
+                    state, reason, related = "not_measurable", exclusion, ()
+                else:
+                    state, reason, related = self._line_state(
+                        item.new_path, line_number, source_lines, coverage
+                    )
                 source_text = source_lines[line_number - 1] if 0 < line_number <= len(source_lines) else ""
                 changed_lines.append(
                     {
