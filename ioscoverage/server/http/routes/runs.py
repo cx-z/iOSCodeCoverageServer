@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 from ioscoverage.analysis.scheduler import AnalysisSchedulerError
 from ioscoverage.integrations.gitlab_mr import GitLabMRClientError
 from ioscoverage.integrations.xcode_artifacts import ArtifactValidationError
+from ioscoverage.storage.profile_format import profile_format
 from ioscoverage.storage.analysis_state import AnalysisStateStoreError
 from ioscoverage.storage.coverage_store import CoverageStoreError
 from ioscoverage.storage.reports import CoverageReportError
@@ -34,7 +35,7 @@ from ioscoverage.web.pages.report import render_coverage_report_page
 
 class RunRoutesMixin:
     def _handle_run_upload(self) -> None:
-        """Decodes one bounded Run body before existing immutable profile persistence."""
+        """Durably accepts a bounded raw/indexed Run and binds indexed receipt to provenance."""
 
         try:
             with decoded_run_body(
@@ -86,6 +87,8 @@ class RunRoutesMixin:
         self._send_json(
             status,
             {
+                **({"profile_format": "indexed", "metadata_sha256": run["metadata_sha256"]}
+                   if profile_format(run["metadata"]) == "indexed" else {}),
                 "status": "accepted",
                 "run_id": run["id"],
                 "cycle_id": run["cycle_id"],

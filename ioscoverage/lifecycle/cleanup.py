@@ -1,5 +1,7 @@
 """Dependency-driven cleanup of runtime data after durable analysis publication."""
 
+from ioscoverage.storage.profile_format import payload_name
+
 import hashlib
 import json
 import os
@@ -296,7 +298,7 @@ class RuntimeDataCleaner:
                         run_dir = self.paths.data_dir / "cycles" / cycle_id / "runs" / run_id
                         present = self._add_file_candidate(
                             cycle_candidates,
-                            run_dir / "payload.profraw",
+                            run_dir / str(run["profile_filename"]),
                             "run_profraw",
                             {
                                 "size": input_run["payload_size"],
@@ -564,7 +566,7 @@ class RuntimeDataCleaner:
             raise RuntimeCleanupError("latest_success_invalid", "stored Run upload identity is missing") from error
         if uploaded_sha != run.get("payload_sha256"):
             raise RuntimeCleanupError("latest_success_invalid", "stored Run upload identity changed")
-        return run
+        return {**run, "profile_filename": payload_name(metadata)}
 
     def _protect_reference(self, retained: Set[Path], directory: Path) -> None:
         self._assert_safe_target(directory)

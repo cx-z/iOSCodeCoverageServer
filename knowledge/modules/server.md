@@ -19,6 +19,7 @@ No SQL, artifact persistence, LLVM, Git diff, cumulative mapping, page business-
 - `ioscoverage/server/http/server.py`: `ProbeHTTPServer`, analysis-worker, and cleanup-worker lifecycle.
 - `ioscoverage/server/http/router.py`: `ProbeRequestHandler` and route matching.
 - `auth.py`, `request.py`, `multipart.py`, `response.py`, `errors.py`, `request_logging.py`: cross-route HTTP concerns. `auth.py` resolves anonymous/operator/packaging/run_upload/web_user principals; an invalid Bearer never falls back to Cookie. `_authorize_read` keeps the fixed extension routes anonymous only when configured.
+- `http/routes/runs.py` adds indexed format/metadata-SHA strict echoes while retaining raw responses. Format/source validation belongs to storage; the HTTP layer does not run LLVM.
 - `http/run_body.py`: Run-only identity/gzip exact-length decoder; bounded temporary-file output, one gzip member, no capability negotiation. Auth runs before decoding. Multipart receives the decoded stream and length; storage and SHA/idempotency remain based on raw profile bytes.
 - `http/routes/`: resource-specific handlers, including account/admin routes and admin/operator maintenance conversion.
 - `http/routes/pages.py`: keeps `/login/` and `/cycles/` as data-free shells, with Session-aware temporary redirects between authentication and workbench; machine Bearer credentials never open the workbench.

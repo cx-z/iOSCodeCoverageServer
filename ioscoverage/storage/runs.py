@@ -17,6 +17,8 @@ from typing import BinaryIO, Dict, Iterator, List, Mapping, Optional, Tuple
 from ioscoverage.integrations.xcode_artifacts import ArtifactValidationError
 from ioscoverage.integrations.git_repository import GitRepositoryError
 from ioscoverage.storage.common import *
+from ioscoverage.storage.profile_format import payload_name, profile_extension
+from ioscoverage.storage.run_aggregation import validate_aggregation
 
 
 class RunStoreMixin:
@@ -28,7 +30,7 @@ class RunStoreMixin:
         profile_stream: BinaryIO,
         max_profile_bytes: int,
     ) -> Tuple[Dict[str, object], bool]:
-        """Persists one independent profraw with strict run_id idempotency."""
+        """Persists one raw or indexed object with strict metadata/payload idempotency."""
 
         normalized = self._validate_run_metadata(metadata)
         declared_sha256 = declared_sha256.lower()
@@ -37,9 +39,10 @@ class RunStoreMixin:
         run_id = str(normalized["run_id"])
         cycle_id = str(normalized["cycle_id"])
         build_id = str(normalized["build_id"])
-        if Path(filename).name.lower() != run_id + ".profraw":
+        extension = profile_extension(metadata)
+        if filename.lower() != run_id + extension:
             raise CoverageStoreError(
-                "invalid_profile_filename", "profile filename must be <run_id>.profraw"
+                "invalid_profile_filename", "profile filename must be <run_id>" + extension
             )
         metadata_bytes = self._canonical_json_bytes(metadata)
         metadata_sha256 = hashlib.sha256(metadata_bytes).hexdigest()
@@ -78,11 +81,16 @@ class RunStoreMixin:
                 self._write_bytes(staging_dir / "metadata.json", metadata_bytes + b"\n")
                 actual_size = self._write_verified_stream(
                     profile_stream,
-                    staging_dir / "payload.profraw",
+                    staging_dir / payload_name(metadata),
                     declared_sha256,
                     None,
                     max_profile_bytes,
                 )
+                if extension == ".profdata":
+                    with (staging_dir / payload_name(metadata)).open("rb") as profile:
+                        header = profile.read(16)
+                    if len(header) < 16 or header[:8] != bytes.fromhex("ff6c70726f666981"):
+                        raise CoverageStoreError("invalid_metadata", "indexed payload has no indexed profile header")
                 self._write_bytes(staging_dir / "upload.sha256", (declared_sha256 + "\n").encode("ascii"))
                 final_dir.parent.mkdir(parents=True, exist_ok=True)
                 if final_dir.exists():
@@ -168,6 +176,8 @@ class RunStoreMixin:
             "captured_at",
             "app_state",
             "trigger_reason",
+            "profile_format",
+            "aggregation",
         }
         self._reject_unknown_fields(metadata, allowed)
         self._require_schema_version(metadata)
@@ -188,6 +198,7 @@ class RunStoreMixin:
         for optional_field in ("app_state", "trigger_reason"):
             if optional_field in metadata:
                 normalized[optional_field] = self._require_text(metadata, optional_field)
+        validate_aggregation(self, metadata)
         return normalized
     def _assert_run_files_exist(self, cycle_id: str, run_id: str) -> None:
         """Prevents an idempotent response from hiding missing immutable Run files."""
@@ -195,7 +206,8 @@ class RunStoreMixin:
         base = self._run_directory(cycle_id, run_id)
         metadata_path = base / "metadata.json"
         upload_path = base / "upload.sha256"
-        payload_path = base / "payload.profraw"
+        row = self._find_run(run_id)
+        payload_path = base / payload_name(json.loads(str(row["metadata_json"])))
         if metadata_path.is_file() and upload_path.is_file() and not payload_path.is_file():
             row = self._find_run(run_id)
             evidence_store = getattr(self, "retained_evidence_store", None)

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """One-click, read-only orchestration of all immutable analyses for one Cycle."""
 
+from ioscoverage.storage.profile_format import payload_name
+
 import hashlib
 import json
 import os
@@ -448,7 +450,7 @@ class CycleAnalysisOrchestrator:
                         "run_metadata_mismatch",
                         "Run metadata does not match SQLite or its SHA-256",
                     )
-                payload_path = run_dir / "payload.profraw"
+                payload_path = run_dir / payload_name(database_metadata)
                 if (
                     not payload_path.is_file()
                     and retained_baseline is not None

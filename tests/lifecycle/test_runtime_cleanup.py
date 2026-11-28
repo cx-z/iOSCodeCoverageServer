@@ -25,7 +25,8 @@ from ioscoverage.cli.cleanup_runtime_data import build_parser
 class CleanupFixture:
     """Creates one complete report graph plus redundant runtime inputs."""
 
-    def __init__(self, coverage_binary="main_executable"):
+    def __init__(self, coverage_binary="main_executable", profile_format="raw"):
+        self.profile_format = profile_format
         self.temporary = tempfile.TemporaryDirectory(prefix="ios-coverage-cleanup-tests-")
         self.paths = RuntimePaths.from_root(Path(self.temporary.name))
         self.paths.prepare_directories()
@@ -124,11 +125,13 @@ class CleanupFixture:
         self.run_dir = self.paths.data_dir / "cycles" / self.cycle_id / "runs" / self.run_id
         self.run_dir.mkdir(parents=True)
         self.metadata = {"run_id": self.run_id}
+        if self.profile_format == "indexed":
+            self.metadata.update(profile_format="indexed", aggregation={"sources": [{"run_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}]})
         self.metadata_sha = hashlib.sha256(self._canonical_json(self.metadata)).hexdigest()
         self.payload = b"profile-payload"
         self.payload_sha = self._sha256(self.payload)
         self._write_json(self.run_dir / "metadata.json", self.metadata)
-        (self.run_dir / "payload.profraw").write_bytes(self.payload)
+        (self.run_dir / ("payload.profdata" if self.profile_format == "indexed" else "payload.profraw")).write_bytes(self.payload)
         (self.run_dir / "upload.sha256").write_text(self.payload_sha + "\n")
 
     def _analysis(self):
@@ -311,6 +314,26 @@ class RuntimeDataCleanerTests(unittest.TestCase):
         self.assertEqual(before, self.fixture.tree_identity())
         self.assertEqual(result["scanned"]["runs"], 1)
         self.assertGreater(result["planned_release_bytes"], 0)
+
+    def test_indexed_cleanup_and_replay_do_not_authorize_declared_sources(self):
+        """Compacts the actual indexed object only; declared sources are not incorporated Run evidence."""
+        fixture = CleanupFixture(profile_format="indexed")
+        try:
+            source = fixture.paths.data_dir / "cycles" / fixture.cycle_id / "runs" / "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+            source.mkdir()
+            (source / "payload.profraw").write_bytes(b"independent-source")
+            result = RuntimeDataCleaner(fixture.paths).run(apply=True)
+            self.assertFalse((fixture.run_dir / "payload.profdata").exists())
+            self.assertTrue((source / "payload.profraw").is_file())
+            evidence = RetainedBuildEvidenceStore(fixture.paths.analysis_dir)
+            with sqlite3.connect(str(fixture.paths.database)) as connection:
+                connection.row_factory = sqlite3.Row
+                row = dict(connection.execute("SELECT * FROM runs WHERE id=?", (fixture.run_id,)).fetchone())
+            self.assertTrue(evidence.run_is_retained(fixture.cycle_id, fixture.build_id, row))
+            repeated = RuntimeDataCleaner(fixture.paths).run(apply=True)
+            self.assertEqual(repeated["released_bytes"], 0)
+        finally:
+            fixture.close()
 
     def test_apply_keeps_latest_report_and_baseline_but_deletes_redundancy(self):
         result = RuntimeDataCleaner(self.fixture.paths).run(apply=True)

@@ -426,6 +426,65 @@ class APIContractTests(unittest.TestCase):
             headers,
         )
 
+    def test_indexed_gzip_receipt_and_immutable_provenance(self):
+        """Binds exact normalized provenance, rejects changed sources and format/name disagreement."""
+        from tests.aggregation_fixtures import indexed_metadata
+        import copy
+        metadata = indexed_metadata(self.run_metadata(str(uuid.uuid4()), str(uuid.uuid4())))
+        profile = bytes.fromhex("ff6c70726f6669810c00000000000000") + b"fixture-indexed"
+
+        def send(item, payload=profile, extension=".profdata"):
+            body, content_type = self.multipart(
+                {"metadata": json.dumps(item, ensure_ascii=False), "sha256": hashlib.sha256(payload).hexdigest()},
+                {"profile": (item["run_id"] + extension, payload)})
+            encoded = gzip.compress(body)
+            return self.request("POST", "/api/v1/runs", encoded,
+                {"Content-Type": content_type, "Content-Encoding": "gzip", "Content-Length": str(len(encoded))})
+
+        status, receipt = send(metadata)
+        self.assertEqual(status, 202)
+        self.assertEqual(receipt["profile_format"], "indexed")
+        canonical = json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        self.assertEqual(receipt["metadata_sha256"], hashlib.sha256(canonical).hexdigest())
+        path = self.data_dir / "cycles" / self.cycle_id / "runs" / metadata["run_id"]
+        self.assertEqual((path / "payload.profdata").read_bytes(), profile)
+        self.assertFalse((path / "payload.profraw").exists())
+        self.assertEqual(send(metadata)[0], 200)
+        changed = copy.deepcopy(metadata)
+        changed["aggregation"]["sources"][0]["sha256"] = "c" * 64
+        self.assertEqual(send(changed)[0], 409)
+        self.assertEqual(send(metadata, extension=".profraw")[0], 400)
+        for mutation in ("duplicate", "wrong_group", "sequence", "order"):
+            invalid = copy.deepcopy(metadata)
+            invalid["run_id"] = str(uuid.uuid4())
+            sources = invalid["aggregation"]["sources"]
+            if mutation == "duplicate": sources[1] = sources[0]
+            elif mutation == "wrong_group": sources[0]["build_id"] = str(uuid.uuid4())
+            elif mutation == "sequence": sources[0]["capture_sequence"] = True
+            else: sources.reverse()
+            self.assertEqual(send(invalid)[0], 400, mutation)
+        invalid = copy.deepcopy(metadata)
+        invalid["run_id"] = str(uuid.uuid4())
+        self.assertEqual(send(invalid, payload=b"raw masquerading as indexed")[0], 400)
+        overlapping = copy.deepcopy(metadata)
+        overlapping["run_id"] = str(uuid.uuid4())
+        self.assertEqual(send(overlapping)[0], 202)
+        with sqlite3.connect(str(self.database)) as connection:
+            self.assertEqual(connection.execute("SELECT count(*) FROM runs").fetchone()[0], 2)
+        # Missing actual payload requires evidence for M itself, never merely its declared sources.
+        (path / "payload.profdata").unlink()
+        self.assertEqual(send(metadata)[0], 500)
+        evidence = Mock()
+        evidence.run_is_retained.return_value = True
+        self.server.config.coverage_store.retained_evidence_store = evidence
+        self.assertEqual(send(metadata)[0], 200)
+        retained_args = evidence.run_is_retained.call_args.args
+        self.assertEqual(retained_args[2]["id"], metadata["run_id"])
+        self.assertEqual(retained_args[2]["metadata_sha256"], receipt["metadata_sha256"])
+        evidence.run_is_retained.return_value = False
+        self.assertEqual(send(metadata)[0], 500)
+
+
     def test_restricted_token_uploads_run_but_cannot_read_resources(self) -> None:
         """Allows Run upload and report reads while denying every management route."""
 

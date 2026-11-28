@@ -6,7 +6,7 @@ These rules are ordinary-task stop conditions. A change that needs to violate on
 
 - Cycle ID and `base_sha` are immutable; `head_sha` may advance under the existing API.
 - A Build is immutable after registration, including Git snapshot, `coverage_binary`, manifest, UUIDs, hashes, sizes, and actual artifact set.
-- A Run remains tied to the Cycle/Build that created it. A complete unknown-Build Run may remain `pending_build` and later be promoted.
+- A Run remains tied to the Cycle/Build that created it. Optional indexed aggregation keeps one object/one Run in the existing table; its canonical metadata fingerprint binds the complete sorted source declaration. Provenance never creates source rows, proves source/content equivalence or authorizes deleting another Run. A complete unknown-Build Run may remain `pending_build` and later be promoted.
 - Idempotent replay succeeds only for the same stable identity and content; conflicting content is rejected.
 - Uploads use staging, size/SHA validation, fsync, and atomic publication before success.
 - Existing SQLite schema, triggers, meanings, and runtime paths are not silently migrated or reinterpreted.
@@ -30,7 +30,7 @@ These rules are ordinary-task stop conditions. A change that needs to violate on
 - `not_measurable`, `unknown`, and deleted lines do not enter the measurable coverage denominator. With a successful report, the separate MR display ratio uses its current `covered + uncovered` count rather than a Build denominator; zero denominators and source-only views without a successful report have no percentage.
 - Analysis failure keeps durable Runs and the previous formal latest success. A missing/untested current Build may still publish validated independent same-Build evidence for MR display. Its atomic reference never rewrites a formal report or authorizes raw-input deletion; cleanup must protect its validated source result.
 - Immutable analysis output is reusable only after its completion manifest and file identities validate. Changes to non-executable exclusions version the diff, Cycle and orchestration identities together; existing reports are never rewritten, and reanalysis publishes the revised counts in a new immutable result.
-- Incorporated raw profiles may be removed only after a crash-durable retained baseline binds the exact Cycle, Build, input set, and Run identities to an intact `merged.profdata` and LLVM export. Existing evidence must be re-fsynced before it can authorize retry deletion. A later Run merges with that baseline only inside the same Build.
+- Incorporated raw or indexed profiles may be removed only after a crash-durable retained baseline binds the exact Cycle, Build, input set, and Run identities to an intact `merged.profdata` and LLVM export. Existing evidence must be re-fsynced before it can authorize retry deletion. A later Run merges with that baseline only inside the same Build.
 - The exact coverage binary remains available for future same-Build exports. Historical inheritance continues to consume independently produced per-Build exports and the existing strict Git/region proof.
 
 ## Scheduling and security

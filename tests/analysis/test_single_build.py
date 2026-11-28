@@ -244,6 +244,32 @@ class SingleBuildAnalyzerTests(unittest.TestCase):
             self.assertTrue((result.output_directory / filename).is_file(), filename)
         self.assertEqual(self._sha256(self.database), database_sha)
 
+    def test_indexed_input_survives_retained_baseline_and_new_raw(self):
+        """Uses actual indexed Run identity through mixed inputs, compaction and later raw input."""
+        from tests.aggregation_fixtures import indexed_metadata
+        run_id = self.run_ids[0]
+        directory = self._run_directory(run_id)
+        metadata = indexed_metadata(json.loads((directory / "metadata.json").read_text()))
+        canonical = self._canonical(metadata)
+        (directory / "metadata.json").write_bytes(canonical)
+        (directory / "payload.profraw").rename(directory / "payload.profdata")
+        with sqlite3.connect(str(self.database)) as connection:
+            connection.execute("UPDATE runs SET metadata_json=?, metadata_sha256=? WHERE id=?",
+                (canonical.decode(), hashlib.sha256(canonical).hexdigest(), run_id))
+        result = self.analyzer().analyze(self.cycle_id, self.build_id, self.run_ids)
+        merge = next(record for record in self.tools.runners[-1].records if record["label"] == "llvm-profdata-merge")
+        self.assertIn(str(directory / "payload.profdata"), merge["arguments"])
+        evidence = self.analyzer().retained_evidence_store
+        evidence.publish(self.cycle_id, self.build_id, result.output_directory, ("dsym",))
+        (directory / "payload.profdata").unlink()
+        (self._run_directory(self.run_ids[1]) / "payload.profraw").unlink()
+        later = str(uuid.uuid4())
+        self._create_run(later, b"later")
+        self.analyzer().analyze(self.cycle_id, self.build_id, self.run_ids + [later])
+        merge = next(record for record in self.tools.runners[-1].records if record["label"] == "llvm-profdata-merge")
+        self.assertTrue(any(argument.endswith("merged.profdata") for argument in merge["arguments"]))
+        self.assertIn(str(self._run_directory(later) / "payload.profraw"), merge["arguments"])
+
     def test_duplicate_run_id_is_rejected(self) -> None:
         """Rejects duplicate identities before any LLVM process starts."""
 

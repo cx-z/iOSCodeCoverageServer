@@ -22,6 +22,7 @@ ioscoverage/
   storage/                     SQLite and immutable file persistence
     coverage_store.py          Cycle/Build/Run facade
     {database,schema,accounts,cycles,builds,runs,artifact_files,validation}.py
+    {profile_format,run_aggregation}.py  fixed Run format/provenance contracts
     analysis_state.py
     reports.py
     cumulative_lines.py        pure legacy/reference line-format codec

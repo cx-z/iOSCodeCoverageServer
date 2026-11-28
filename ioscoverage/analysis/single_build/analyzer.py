@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Restricted, repeatable local LLVM analysis for one registered iOS Build."""
 
+from ioscoverage.storage.profile_format import payload_name
+
 import hashlib
 import json
 import os
@@ -426,7 +428,6 @@ class SingleBuildAnalyzer:
             )
         run_directory = self._run_directory(cycle_id, run_id)
         metadata_path = run_directory / "metadata.json"
-        profile_path = run_directory / "payload.profraw"
         upload_sha_path = run_directory / "upload.sha256"
         try:
             disk_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -467,7 +468,8 @@ class SingleBuildAnalyzer:
             run["profile_path"] = None
             run["retained_in_input_set_sha256"] = baseline.input_set_sha256
             return
-        actual_size, actual_sha = self._file_identity(profile_path, "Run profraw")
+        profile_path = run_directory / payload_name(database_metadata)
+        actual_size, actual_sha = self._file_identity(profile_path, "Run profile")
         if actual_size != run["payload_size"]:
             raise SingleBuildAnalysisError(
                 "profraw_size_mismatch", "Run profraw size differs from SQLite: " + run_id

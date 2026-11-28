@@ -4,14 +4,14 @@ This is the mandatory first read for engineering work. It routes an agent to a s
 
 ## Product purpose
 
-The server receives immutable iOS Build artifacts and user-triggered `.profraw` Runs for registered projects. It analyzes each Build independently, intersects the current Build with its fixed Git diff, and conservatively inherits unchanged historical region hits.
+The server receives immutable iOS Build artifacts and user-triggered raw/indexed profile Runs for registered projects. It analyzes each Build independently, intersects the current Build with its fixed Git diff, and conservatively inherits unchanged historical region hits.
 
 ## Core concepts
 
 - **ProjectRegistry**: immutable mapping from Cycle.project to repository, GitLab project, Bundle ID allowlist, and compiler repository directory-name allowlist.
 - **Cycle**: one registered-project MR testing lifetime. `base_sha` is initial audit data; `head_sha` selects the current requirement commit.
 - **Build**: one immutable package identity: Git snapshot, coverage binary, dSYM, UUIDs, sizes, and hashes.
-- **Run**: one immutable `.profraw` snapshot tied to its original Cycle and Build.
+- **Run**: one immutable raw snapshot or indexed aggregate upload object tied to its original Cycle and Build. Aggregation provenance does not create source Run rows or prove source/payload equivalence.
 - **current Build**: the latest ready Build whose `git_sha` equals the Cycle `head_sha`.
 - **analysis generation**: durable scheduling state. New analyzable input requests a newer generation; the last successful report remains available on failure.
 - **retained Build evidence**: completion-protected binding from incorporated Runs and validated artifacts to one same-Build merged profile and LLVM export, allowing safe raw-input compaction.

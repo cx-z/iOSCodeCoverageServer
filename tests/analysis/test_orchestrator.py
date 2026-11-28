@@ -330,6 +330,25 @@ class CycleAnalysisOrchestratorTests(unittest.TestCase):
         self.assertEqual([call[1] for call in single.calls], [self.workspace.build_a, self.workspace.build_b, self.workspace.build_c])
         self.assertEqual(result.summary["selected_build_count"], 3)
 
+    def test_indexed_preflight_uses_actual_object_path_and_keeps_build_scope(self):
+        """Validates indexed bytes/metadata before orchestration without consulting declared source payloads."""
+        from tests.aggregation_fixtures import indexed_metadata
+        run_id = "30000000-0000-4000-8000-000000000001"
+        directory = self.workspace.data / "cycles" / self.workspace.cycle_id / "runs" / run_id
+        metadata = indexed_metadata(json.loads((directory / "metadata.json").read_text()))
+        write_json(directory / "metadata.json", metadata)
+        (directory / "payload.profraw").rename(directory / "payload.profdata")
+        with sqlite3.connect(str(self.workspace.database)) as connection:
+            connection.execute("UPDATE runs SET metadata_json=?,metadata_sha256=? WHERE id=?",
+                (json.dumps(metadata, ensure_ascii=False, sort_keys=True, separators=(",", ":")), sha(metadata), run_id))
+        orchestrator, single, _, _ = self.workspace.orchestrator()
+        result = orchestrator.analyze(self.workspace.cycle_id)
+        self.assertEqual(result.summary["selected_build_count"], 3)
+        self.assertEqual([call[1] for call in single.calls], [self.workspace.build_a, self.workspace.build_b, self.workspace.build_c])
+        (directory / "payload.profdata").write_bytes(b"changed indexed content")
+        with self.assertRaises(CycleAnalysisOrchestrationError):
+            orchestrator.analyze(self.workspace.cycle_id)
+
     def test_current_build_selection_uses_cycle_head_not_checkout(self):
         """Chooses C solely because its immutable git_sha equals Cycle.head_sha."""
 

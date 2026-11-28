@@ -321,13 +321,13 @@ curl --fail-with-body \
 
 ## 3. Run 上传
 
-Run 路径、multipart 字段、metadata schema、状态码、成功响应和幂等规则独立于后台分析。iPhone 只上传 Run metadata、独立 `.profraw` 和 SHA-256，不上传 Build 大文件，也不调用分析接口。
+Run 路径、multipart 字段、metadata schema、状态码、成功响应和幂等规则独立于后台分析。iPhone 只上传 Run metadata、raw 或 indexed profile 和 SHA-256，不上传 Build 大文件，也不调用分析接口。
 
-`POST /api/v1/runs` 必须恰好包含：文本 `metadata`、文本 `sha256`、文件 `profile`。profile 文件名必须是 `<run_id>.profraw`。
+`POST /api/v1/runs` 必须恰好包含：文本 `metadata`、文本 `sha256`、文件 `profile`。raw 文件名必须是 `<run_id>.profraw`；显式 indexed 合并对象必须是 `<run_id>.profdata`，不接受客户端路径。
 
 ### Run 请求体压缩
 
-新 SDK 在所有网络环境下统一对完整 multipart 请求体使用 gzip（单 member），设置 `Content-Encoding: gzip`，`Content-Length` 为编码后的请求体长度。三个字段、boundary 和解压后 `<run_id>.profraw` 文件名不变；SHA-256 与成功响应 `size` 始终针对原始 profile，gzip / identity 表示不影响 Run 幂等身份。
+新 SDK 在所有网络环境下统一对完整 multipart 请求体使用 gzip（单 member），设置 `Content-Encoding: gzip`，`Content-Length` 为编码后的请求体长度。三个字段和 boundary 不变，解压后的文件名必须匹配显式格式；SHA-256 与成功响应 `size` 始终针对实际 profile payload，gzip / identity 表示不影响 Run 幂等身份。
 
 当前只有本机服务端，先更新服务端再更新 SDK；不增加 `/health` 能力协商或旧服务降级。服务端继续接收未设置编码或 identity 的现有客户端请求，新 SDK 压缩失败则保留原始数据并停止本批，不发送未压缩请求。
 
@@ -392,13 +392,63 @@ Build 未注册时，完整文件仍持久化，返回 HTTP 202、`run_state: pe
 
 首次成功保存且已经 `uploaded/analyzable` 的 Run 会在持久化提交后请求该 Cycle 的后台分析。HTTP 成功只表示 Run 文件和 SQLite 已安全提交，不等待 LLVM；后台失败也不会反向把 Run 改成失败。完全幂等重放不会重复触发。iOS 继续按原响应完成本地上传队列，不需要解析分析状态。
 
+### Indexed 合并对象（schema 1 可选扩展）
+
+原 raw metadata 不增加字段，原 fingerprint 不变。`profile_format` 缺省或 `raw` 使用原始协议；`indexed` 表示一个独立的客户端合并上传对象，其顶层 `run_id` 必须是新身份，`launch_id/process_id/captured_at` 表示创建该对象的进程上下文和时间，`trigger_reason` 必须是 `cross_launch_merge`。
+
+indexed metadata 必须包含：
+
+```json
+{
+  "profile_format": "indexed",
+  "aggregation": {
+    "schema_version": 1,
+    "merger_version": "llvm-20.1.8/cck-1",
+    "sources": [
+      {
+        "run_id": "11111111-1111-4111-8111-111111111111",
+        "launch_id": "22222222-2222-4222-8222-222222222222",
+        "process_id": 123,
+        "captured_at": "2026-01-01T00:00:00Z",
+        "size": 344,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "metadata_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "capture_sequence": 1
+      },
+      {
+        "run_id": "33333333-3333-4333-8333-333333333333",
+        "launch_id": "44444444-4444-4444-8444-444444444444",
+        "process_id": 456,
+        "captured_at": "2026-01-02T00:00:00Z",
+        "size": 344,
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "metadata_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "capture_sequence": 1
+      }
+    ]
+  }
+}
+```
+
+此片段补充前述全部顶层 Run 必填身份字段。sources 必须为 2–64 个实际原始输入，按规范小写 Run UUID 升序、ID 唯一、不等于对象自身 ID，并至少包含两个启动。所有来源继承外层 Cycle/Build/device，不允许携带另一组身份或路径字段。source 的 process_id/size、可选 capture_sequence 为正的 64 位范围整数；时间带时区；SHA 为小写 64 位 hex。merger_version 为非空且 UTF-8 不超过 128 字节。整个 canonical metadata 不超过 64 KiB；multipart 文本原限制不变。raw 不允许 aggregation。无效声明/格式/文件名为 HTTP 400（`invalid_metadata` / `unknown_field` / `invalid_profile_filename`），不创建成功 Run。
+
+完整 metadata fingerprint（含有序 sources）使用 UTF-8、对象 key 排序、紧凑分隔符、非 ASCII 不转义的 JSON。source 的 metadata_sha256 使用原始 Run metadata 的同一算法，不包含本地 capture_sequence。字段缺省与显式存在不同，数组顺序参与身份。Swift/Python 固定样例验证跨语言一致性。
+
+indexed 文件必须有 indexed profile header；完整 LLVM 可读性仍由异步分析检查。服务端不能仅凭来源 SHA 证明合并内容等价。SDK 必须通过格式矩阵及发布前逐 region/行/分支等价门槛，不能把 HTTP 持久接收当作等价性证明。
+
+indexed 的成功响应在原字段上额外回显 `profile_format: "indexed"` 与 `metadata_sha256`（规范化的完整 metadata SHA）。`sha256/size` 为该 indexed payload 的身份；gzip 字节数不是 payload size。只有全部严格回显匹配且本地接收凭据耐久提交后，SDK 才能派生来源义务完成，原始 Run 不因此成为直接 uploaded。200/201/202 语义保持不变。
+
+一对象一 Run，扩展存入既有 metadata_json，不新增来源表或 schema 迁移。同 ID 改变格式、来源或内容仍为 409；同来源允许出现在不同对象或原 Run 中。下一次主动上传重新组合来源时必须新建对象 ID。raw/indexed/同 Build retained baseline 由同 Build LLVM 合并，跨 Build、历史继承和分母规则不变。
+
+服务端固定定位 `payload.profraw` / `payload.profdata`。retained evidence 继续绑定实际接收对象的 Run ID、metadata SHA、payload SHA/size；清理只删除完成保护证明的实际输入。aggregation 声明不创建来源 Run、不扩大删除授权，也不能代替缺失 payload 的 retained 证明。清理后的相同对象重放仍验证提交字节，并要求原实际对象的 retained evidence。
+
 ## 4. 客户端响应处理规则
 
 iOS 上传客户端应按以下规则实现：
 
 1. 仅把 HTTP 200/201/202 且 `status == "accepted"` 的响应视为服务端已持久接收。
 2. 必须核对响应的 `run_id`、`build_id`、`cycle_id`、`sha256`、`size` 均与本地记录一致；任何一项不一致都不能标记本地记录已上传。
-3. HTTP 202 表示服务器已安全保存，但 Build 待注册；本地上传队列可结束该 Run 的网络重试，同时 UI 应提示 Build 未注册。
+3. indexed 还必须核对 `profile_format == "indexed"` 和完整 canonical `metadata_sha256`；来源凭据提交成功前不能完成任何来源义务。HTTP 202 表示服务器已安全保存，但 Build 待注册；本地上传队列可结束该 Run 的网络重试，同时 UI 应提示 Build 未注册。
 4. 网络错误、超时和 5xx 可以用原 metadata 和原 profile 有限重试；不得重新生成 `run_id`。
 5. 编码类拒绝按上节保留原始 Run 并停止本批；HTTP 401/403 停止本轮上传并提示 Token；HTTP 409 是永久身份冲突；HTTP 413 是大小配置问题；HTTP 422 表示 size/SHA、Build Git 快照、UUID 或 dSYM ZIP 校验失败，按稳定 `error` 代码处理。
 6. multipart 字段名和 JSON 字段必须严格使用本文件 schema；服务端会拒绝重复、多余和拼错字段。
